@@ -1,0 +1,28 @@
+[server]
+host = "127.0.0.1"
+port = 8765
+
+# Where bridge task logs are stored.
+task_dir = "~/.local-codex-bridge/tasks"
+
+# Default local Codex binary.
+codex_bin = "codex"
+
+# Default model passed to local Codex. Change if your local CLI exposes a different id.
+default_model = "gpt-5.5"
+
+# Optional additional args appended after `codex exec`.
+# Keep this empty until you verify your local Codex CLI flags.
+default_codex_args = ["--json"]
+
+[projects.vhf]
+name = "VHF"
+path = "/Users/tonyli/Projects/vhf-openclaw-frame"
+default_model = "gpt-5.5"
+
+# Verification commands are allowlisted by key.
+# They run with shell=False. Each command is argv array.
+[projects.vhf.verification]
+git_status = ["git", "status", "--short", "--branch"]
+doctor = ["bash", "scripts/doctor_check.sh"]
+pytest = ["python", "-m", "pytest"]
