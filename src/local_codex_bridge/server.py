@@ -85,7 +85,7 @@ def build_mcp(config_path: str | Path) -> FastMCP:
         files: list[str],
         message: str,
         remote: str = "origin",
-        branch: str = "main",
+        branch: str | None = None,
         timeout: int = 120,
     ) -> dict[str, Any]:
         """Stage selected files, create one local commit, and push it.
