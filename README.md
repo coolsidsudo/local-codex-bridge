@@ -1,5 +1,7 @@
 # Local Codex Bridge
 
+[English](README.md) | [简体中文](docs/README.zh-CN.md)
+
 Local Codex Bridge is a small, project-profile-based MCP server that lets ChatGPT start and inspect **local Codex CLI** tasks on your own machine.
 
 It is designed for workflows where cloud Codex is not the right executor because you want local repository access, local git remotes, and an operator-controlled Codex model such as `gpt-5.5` when your local Codex CLI supports it.
@@ -146,18 +148,17 @@ git_status = ["git", "status", "--short", "--branch"]
 test = ["python", "-m", "pytest"]
 ```
 
-Example VHF-style profile:
+Example docs-site profile:
 
 ```toml
-[projects.vhf]
-name = "VHF"
-path = "/Users/tonyli/Projects/vhf-openclaw-frame"
+[projects.docs_site]
+name = "Docs Site"
+path = "~/Projects/docs-site"
 default_model = "gpt-5.5"
 
-[projects.vhf.verification]
+[projects.docs_site.verification]
 git_status = ["git", "status", "--short", "--branch"]
-doctor = ["bash", "scripts/doctor_check.sh"]
-pytest = ["python", "-m", "pytest"]
+build = ["npm", "run", "build"]
 ```
 
 Use one project profile per repo. The bridge is intentionally generic; do not hardcode project-specific behavior into bridge source code.
@@ -330,7 +331,6 @@ Smoke test only. Do not edit files.
 7. Call get_git_diff and confirm no files changed.
 ```
 
-For a VHF-style profile, use `project_id: vhf`.
 
 ## 12. Normal operating checklist
 

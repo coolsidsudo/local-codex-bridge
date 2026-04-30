@@ -12,17 +12,27 @@ codex_bin = "codex"
 default_model = "gpt-5.5"
 
 # Optional additional args appended after `codex exec`.
-# Keep this empty until you verify your local Codex CLI flags.
 default_codex_args = ["--json"]
 
-[projects.vhf]
-name = "VHF"
-path = "/Users/tonyli/Projects/vhf-openclaw-frame"
+# Example project profile. Replace this with your own local repo.
+[projects.example]
+name = "Example Project"
+path = "~/Projects/example-project"
 default_model = "gpt-5.5"
 
 # Verification commands are allowlisted by key.
-# They run with shell=False. Each command is argv array.
-[projects.vhf.verification]
+# They run with shell=False. Each command is an argv array.
+[projects.example.verification]
 git_status = ["git", "status", "--short", "--branch"]
-doctor = ["bash", "scripts/doctor_check.sh"]
 pytest = ["python", "-m", "pytest"]
+
+# Add more projects by creating additional [projects.<id>] sections.
+#
+# [projects.docs_site]
+# name = "Docs Site"
+# path = "~/Projects/docs-site"
+# default_model = "gpt-5.5"
+#
+# [projects.docs_site.verification]
+# git_status = ["git", "status", "--short", "--branch"]
+# build = ["npm", "run", "build"]
