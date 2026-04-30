@@ -279,7 +279,7 @@ https://example-name.ngrok-free.dev/mcp
 
 不要把这个 URL 提交到 repo。免费 ngrok URL 通常是临时的，应当作为当前会话的运行细节处理。
 
-如果使用 Cloudflare Tunnel 或其他 provider，把它指向同一个本地 bridge endpoint（通常是 `http://127.0.0.1:8765`），并将远程 HTTPS URL 加 `/mcp` 暴露给 ChatGPT connector。
+如果使用 Cloudflare Tunnel 或其他 provider，把它指向同一个本地 bridge endpoint（通常是 `http://127.0.0.1:8765`），并将远程 HTTPS URL 加 `/mcp` 暴露给 ChatGPT connector。 稳定的 Cloudflare Tunnel 设置请参考 [CLOUDFLARE_TUNNEL.md](CLOUDFLARE_TUNNEL.md)。
 
 ## 8. 测试 tunnel endpoint
 
