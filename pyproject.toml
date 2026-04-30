@@ -15,3 +15,6 @@ local-codex-bridge = "local_codex_bridge.cli:app"
 
 [tool.ruff]
 line-length = 100
+
+[project.optional-dependencies]
+test = ["pytest>=8.0.0"]

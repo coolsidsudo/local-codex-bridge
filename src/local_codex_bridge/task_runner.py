@@ -168,6 +168,171 @@ class TaskRunner:
         cmd = project.verification[command_key]
         return self._run(project.path, cmd, timeout=timeout, max_chars=40000)
 
+    def git_commit_and_push(
+        self,
+        project_id: str,
+        files: list[str],
+        message: str,
+        remote: str = "origin",
+        branch: str | None = None,
+        timeout: int = 120,
+    ) -> dict[str, Any]:
+        project = self._project(project_id)
+        repo = project.path
+
+        if not files:
+            return {"status": "blocked_input", "error": "files must not be empty"}
+        if not message.strip():
+            return {"status": "blocked_input", "error": "message must not be empty"}
+        if remote != "origin":
+            return {"status": "blocked_input", "error": "Only remote='origin' is supported"}
+        if branch is not None and not branch.strip():
+            return {"status": "blocked_input", "error": "branch must not be blank when provided"}
+
+        approved_files_result = self._normalize_approved_files(repo, files)
+        if approved_files_result["status"] != "ok":
+            return approved_files_result
+        approved_files = approved_files_result["files"]
+
+        before_status = self._run(repo, ["git", "status", "--short", "--branch"], timeout=20)
+        head_before = self._run(repo, ["git", "rev-parse", "HEAD"], timeout=20)
+        remotes = self._run(repo, ["git", "remote", "-v"], timeout=20)
+        current_branch_result = self._current_branch(repo)
+        current_branch_name = current_branch_result.get("stdout", "").strip()
+
+        evidence = {
+            "before_status": before_status,
+            "head_before": head_before,
+            "remotes": remotes,
+            "current_branch": current_branch_name,
+            "current_branch_result": current_branch_result,
+            "push_remote": remote,
+            "push_branch": branch or current_branch_name,
+            "approved_files": approved_files,
+        }
+
+        if current_branch_result["returncode"] != 0 or not current_branch_name:
+            return {
+                "status": "blocked_branch",
+                "error": "Current branch could not be determined; refusing to push from detached or invalid HEAD",
+                **evidence,
+            }
+
+        push_branch = branch or current_branch_name
+        evidence["push_branch"] = push_branch
+        if push_branch != current_branch_name:
+            return {
+                "status": "blocked_branch",
+                "error": "Requested branch does not match current checked-out branch",
+                **evidence,
+            }
+
+        pre_staged_files = self._staged_files(repo)
+        evidence["pre_staged_files"] = pre_staged_files
+        if pre_staged_files["returncode"] != 0:
+            return {
+                "status": "blocked_staged_files",
+                "error": "Could not inspect staged files before git add",
+                **evidence,
+            }
+        approved_set = set(approved_files)
+        pre_staged_set = set(pre_staged_files["files"])
+        unapproved_pre_staged = sorted(pre_staged_set - approved_set)
+        if unapproved_pre_staged:
+            return {
+                "status": "blocked_staged_files",
+                "error": "Unapproved files are already staged; refusing to commit",
+                "unapproved_staged_files": unapproved_pre_staged,
+                "staged_files": pre_staged_files,
+                "staged_state_risk": "Unapproved files are already staged. Nothing was committed or pushed.",
+                **evidence,
+            }
+
+        add = self._run(
+            repo,
+            ["git", "--literal-pathspecs", "add", "--", *approved_files],
+            timeout=timeout,
+            max_chars=40000,
+        )
+        if add["returncode"] != 0:
+            return {
+                "status": "blocked_add",
+                "error": "git add failed; no commit or push was attempted",
+                **evidence,
+                "add": add,
+                "final_status": self._run(repo, ["git", "status", "--short", "--branch"], timeout=20),
+                "staged_state_risk": "git add failed. Review staged state before retrying.",
+            }
+
+        staged_files = self._staged_files(repo)
+        if staged_files["returncode"] != 0:
+            return {
+                "status": "blocked_staged_files",
+                "error": "Could not inspect staged files after git add",
+                **evidence,
+                "add": add,
+                "staged_files": staged_files,
+                "final_status": self._run(repo, ["git", "status", "--short", "--branch"], timeout=20),
+                "staged_state_risk": "Approved changes may now be staged. Review staged state before retrying.",
+            }
+        if set(staged_files["files"]) != approved_set:
+            return {
+                "status": "blocked_staged_files",
+                "error": "Staged files do not exactly match approved files; refusing to commit",
+                **evidence,
+                "add": add,
+                "staged_files": staged_files,
+                "unexpected_staged_files": sorted(set(staged_files["files"]) - approved_set),
+                "missing_approved_files": sorted(approved_set - set(staged_files["files"])),
+                "final_status": self._run(repo, ["git", "status", "--short", "--branch"], timeout=20),
+                "staged_state_risk": "git add may have left approved changes staged. Review staged state before retrying.",
+            }
+
+        commit = self._run(repo, ["git", "commit", "-m", message], timeout=timeout, max_chars=40000)
+        if commit["returncode"] != 0:
+            return {
+                "status": "blocked_commit",
+                "error": "git commit failed; no push was attempted",
+                **evidence,
+                "add": add,
+                "staged_files": staged_files,
+                "commit": commit,
+                "final_status": self._run(repo, ["git", "status", "--short", "--branch"], timeout=20),
+                "staged_state_risk": "git commit failed and may have left approved changes staged.",
+            }
+
+        head_after = self._run(repo, ["git", "rev-parse", "HEAD"], timeout=20)
+        push = self._run(repo, ["git", "push", remote, push_branch], timeout=timeout, max_chars=40000)
+        final_status = self._run(repo, ["git", "status", "--short", "--branch"], timeout=20)
+        log = self._run(repo, ["git", "log", "-1", "--oneline", "--decorate"], timeout=20)
+
+        if push["returncode"] != 0:
+            return {
+                "status": "blocked_push",
+                "error": "git push failed; commit was created locally but was not pushed",
+                **evidence,
+                "add": add,
+                "staged_files": staged_files,
+                "commit": commit,
+                "head_after": head_after,
+                "push": push,
+                "final_status": final_status,
+                "log": log,
+                "staged_state_risk": "Push failed after a local commit. Review branch state before retrying.",
+            }
+
+        return {
+            "status": "pushed",
+            **evidence,
+            "add": add,
+            "staged_files": staged_files,
+            "commit": commit,
+            "head_after": head_after,
+            "push": push,
+            "final_status": final_status,
+            "log": log,
+        }
+
     def list_tasks(self, limit: int = 20) -> list[dict[str, Any]]:
         task_dirs = sorted(self.config.server.task_dir.glob("*"), key=lambda p: p.name, reverse=True)
         items = []
@@ -181,6 +346,44 @@ class TaskRunner:
                 except Exception as exc:  # noqa: BLE001
                     items.append({"task_id": task_dir.name, "error": str(exc)})
         return items
+
+    def _normalize_approved_files(self, repo: Path, files: list[str]) -> dict[str, Any]:
+        approved_files: list[str] = []
+        for raw in files:
+            if not raw or not raw.strip():
+                return {"status": "blocked_input", "error": "file paths must not be blank"}
+            raw_path = Path(raw).expanduser()
+            candidate = raw_path if raw_path.is_absolute() else repo / raw_path
+            resolved = candidate.resolve(strict=False)
+            try:
+                relative = resolved.relative_to(repo)
+            except ValueError:
+                return {"status": "blocked_input", "error": f"File path escapes project root: {raw}"}
+            if relative == Path("."):
+                return {"status": "blocked_input", "error": "project root cannot be an approved file"}
+            if resolved.exists() and resolved.is_dir():
+                return {"status": "blocked_input", "error": f"Approved path is a directory, not a file: {raw}"}
+            approved = relative.as_posix()
+            if approved not in approved_files:
+                approved_files.append(approved)
+        if not approved_files:
+            return {"status": "blocked_input", "error": "files must not be empty"}
+        return {"status": "ok", "files": approved_files}
+
+    def _current_branch(self, repo: Path) -> dict[str, Any]:
+        return self._run(repo, ["git", "branch", "--show-current"], timeout=20)
+
+    def _staged_files(self, repo: Path) -> dict[str, Any]:
+        result = self._run(
+            repo,
+            ["git", "diff", "--cached", "--name-only", "--diff-filter=ACDMRTUXB"],
+            timeout=20,
+        )
+        if result["returncode"] == 0:
+            result["files"] = sorted(line for line in result["stdout"].splitlines() if line)
+        else:
+            result["files"] = []
+        return result
 
     def _status_from_pid(self, rec: TaskRecord) -> str:
         return self._status_from_pid_path(rec.pid_path)
