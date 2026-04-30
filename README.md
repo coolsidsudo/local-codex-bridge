@@ -6,6 +6,8 @@ Local Codex Bridge is a small, project-profile-based MCP server that lets ChatGP
 
 It is designed for workflows where cloud Codex is not the right executor because you want local repository access, local git remotes, and an operator-controlled Codex model such as `gpt-5.5` when your local Codex CLI supports it.
 
+Local Codex Bridge is an independent, general-purpose developer MCP bridge. It does not assume any downstream project; it works with any configured local repository profile.
+
 ## Why this exists
 
 Some cloud task routes hide or auto-route the model, may not have a working PR/push path, and may force the human to relay prompts and results manually. Local Codex Bridge keeps the executor local:
@@ -21,18 +23,20 @@ That gives ChatGPT a narrow, inspectable tool surface while keeping Codex execut
 ```text
 Human
   -> starts the bridge server and secure HTTPS tunnel once per work session
+  -> reviews diffs and verification output before accepting changes
 
 ChatGPT
   -> connects through a custom MCP connector
   -> verifies project profile, git status, HEAD, and remotes
   -> starts bounded local Codex tasks
   -> reads task logs, diffs, and verification output
-  -> reviews the result
+  -> reviews the result and asks for human approval before acceptance commit/push
 
 Local Codex Bridge
   -> runs on the operator's machine
   -> exposes configured project profiles and allowlisted operations
   -> invokes local Codex CLI inside the selected repo
+  -> can perform a controlled, human-approved git add/commit/push for approved files
 
 Local Codex CLI
   -> runs with the local model/config chosen by the operator
@@ -45,7 +49,7 @@ GitHub or another VCS host
 
 ## Tool surface
 
-The initial tool surface is intentionally conservative:
+The tool surface is intentionally conservative:
 
 - `list_projects` — list configured project profiles.
 - `get_project_status` — report git status, HEAD, and remotes for a project.
@@ -55,8 +59,36 @@ The initial tool surface is intentionally conservative:
 - `abort_task` — terminate a running local Codex process.
 - `get_git_diff` — inspect git status, diff stat, and diff.
 - `run_verification` — run an allowlisted verification command.
+- `git_commit_and_push` — after human approval, stage approved files, create one commit, and push it to the current branch on `origin`.
 
-The bridge does **not** expose arbitrary shell execution in v0. Verification commands are allowlisted per project.
+The bridge does **not** expose arbitrary shell execution in v0. Verification commands are allowlisted per project. `git_commit_and_push` is a bridge-owned Git acceptance operation, not a general shell or filesystem tool.
+
+## Controlled acceptance flow
+
+The intended acceptance workflow is:
+
+```text
+ChatGPT plans/reviews
+  -> local Codex CLI edits a configured repo
+  -> ChatGPT reviews diff and verification output
+  -> human accepts
+  -> Local Codex Bridge performs controlled git add/commit/push
+```
+
+`git_commit_and_push` should only be called after the human has reviewed the exact diff and verification evidence. Its safeguards include:
+
+- Only configured project roots are accessible.
+- No arbitrary shell execution is exposed.
+- Verification commands remain allowlisted per project.
+- Remote is currently limited to `origin`.
+- If `branch` is omitted, the bridge uses the current checked-out branch.
+- If `branch` is provided, it must match the current checked-out branch.
+- Approved file paths are normalized to repo-relative paths and must stay inside the configured project root.
+- Git staging uses literal pathspec handling so pathspec magic such as `:(glob)*` is not expanded.
+- Modified, newly added, and deleted files are supported.
+- Unapproved pre-staged files are refused.
+- Staged files must exactly match the approved file list before a commit is created.
+- Unsafe input or state returns structured `blocked_*` diagnostics with useful git evidence where relevant.
 
 ## Requirements
 
@@ -66,6 +98,8 @@ The bridge does **not** expose arbitrary shell execution in v0. Verification com
 - A local git repository you want Codex to work in.
 - A tunnel provider such as ngrok or Cloudflare Tunnel if you want ChatGPT to connect from the web.
 - ChatGPT custom MCP connector access.
+
+Tunnels are external deployment layers. They are not Python runtime dependencies of Local Codex Bridge.
 
 ## 1. Install Local Codex Bridge
 
@@ -202,6 +236,8 @@ HTTP/1.1 406 Not Acceptable
 
 ## 6. Install and configure ngrok
 
+ngrok is one temporary/dev tunnel option. Cloudflare Tunnel is also a preferred/future deployment option for many setups. Tunnel clients are external deployment tools; Local Codex Bridge does not depend on `ngrok`, `cloudflared`, or any tunnel provider package at Python runtime.
+
 Install ngrok with Homebrew on macOS:
 
 ```bash
@@ -243,7 +279,9 @@ https://example-name.ngrok-free.dev/mcp
 
 Do **not** commit this URL to a repo. Free ngrok URLs are often temporary and should be treated as session-local operational details.
 
-## 8. Test the ngrok endpoint
+If you use Cloudflare Tunnel or another provider, point it at the same local bridge endpoint, normally `http://127.0.0.1:8765`, and expose the remote HTTPS URL plus `/mcp`.
+
+## 8. Test the tunnel endpoint
 
 In a third terminal:
 
@@ -272,7 +310,7 @@ In ChatGPT web:
 5. Go back to **Apps & Connectors**.
 6. Create a new custom connector.
 7. Use a name such as `Local Codex Bridge`.
-8. Set the MCP server URL to your current ngrok URL plus `/mcp`:
+8. Set the MCP server URL to your current tunnel URL plus `/mcp`:
 
 ```text
 https://example-name.ngrok-free.dev/mcp
@@ -292,7 +330,10 @@ list_tasks
 abort_task
 get_git_diff
 run_verification
+git_commit_and_push
 ```
+
+ChatGPT-side developer MCP errors such as `FORBIDDEN: This conversation does not support developer MCPs` are platform/conversation gating. Local Codex Bridge cannot guarantee that bridge-code changes will enable developer MCPs for a gated ChatGPT conversation.
 
 ## 10. Select the connector in a chat
 
@@ -331,22 +372,25 @@ Smoke test only. Do not edit files.
 7. Call get_git_diff and confirm no files changed.
 ```
 
-
 ## 12. Normal operating checklist
 
 Before starting real implementation work:
 
 ```text
 1. Start local-codex-bridge serve.
-2. Start ngrok http 8765.
-3. Refresh the ChatGPT connector URL if the ngrok URL changed.
+2. Start a secure HTTPS tunnel, for example ngrok http 8765.
+3. Refresh the ChatGPT connector URL if the tunnel URL changed.
 4. Select Local Codex Bridge in the chat.
 5. Run list_projects.
 6. Run get_project_status for the target project.
 7. Run git_status verification.
 8. Confirm branch, HEAD, remote, and clean worktree.
 9. Start a bounded local Codex task.
-10. Review stdout/stderr, git diff, and verification before accepting anything.
+10. Review stdout/stderr, git diff, and verification output.
+11. If changes are not acceptable, ask Codex to revise or stop.
+12. If changes are acceptable, explicitly approve the exact files and commit message.
+13. Call git_commit_and_push only after human approval.
+14. Confirm the returned branch, remote, commit, push output, and final status.
 ```
 
 ## 13. Common issues
@@ -358,6 +402,8 @@ This is usually fine. The MCP endpoint is alive, but curl is not a complete MCP 
 ### ChatGPT settings show the connector, but the chat cannot use it
 
 Try a new chat after connecting the app. Then select the connector from the `+` menu.
+
+If ChatGPT reports `FORBIDDEN: This conversation does not support developer MCPs`, treat it as platform/conversation gating. Try a supported ChatGPT surface/conversation with developer MCP access; bridge code cannot guarantee a fix for that platform gate.
 
 ### `gpt-5.5` requires a newer Codex version
 
@@ -371,9 +417,13 @@ Your local Codex config may contain an MCP server with an expired token. That is
 
 Stop and inspect before starting Codex. The bridge intentionally makes dirty state visible so the reviewer can avoid mixing unrelated changes.
 
+### `git_commit_and_push` returns `blocked_*`
+
+Read the structured diagnostics. Common causes include an empty file list, blank commit message, a non-`origin` remote, a branch mismatch, path escaping the project root, unapproved pre-staged files, or staged files that do not exactly match the approved file list. Inspect git state before retrying, especially if a failed operation may have left approved changes staged.
+
 ## 14. Security notes
 
-This bridge can cause local Codex to modify files in configured repositories. Treat it as powerful local automation.
+This bridge can cause local Codex to modify files in configured repositories and can perform a controlled acceptance commit/push after explicit human approval. Treat it as powerful local automation.
 
 Recommended defaults:
 
@@ -381,7 +431,8 @@ Recommended defaults:
 - Expose it only through an authenticated or private tunnel.
 - Configure only repos you are willing to let ChatGPT/Codex work on.
 - Keep verification commands allowlisted.
-- Review diffs before committing, pushing, or merging.
+- Review diffs and verification output before accepting changes.
+- Use `git_commit_and_push` only for reviewed and approved files.
 - Do not pass secrets in prompts.
 - Do not publish temporary tunnel URLs in public issues or docs.
 - Do not add arbitrary shell execution unless you fully understand the risk.
@@ -393,9 +444,9 @@ See [`docs/SECURITY.md`](docs/SECURITY.md) for more detail.
 ```bash
 python3.11 -m venv .venv
 source .venv/bin/activate
-pip install -e '.[dev]'
-pytest
-ruff check .
+pip install -e '.[test]'
+python3 -m compileall src
+python3 -m pytest
 ```
 
 ## Status
