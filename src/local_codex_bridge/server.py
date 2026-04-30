@@ -79,4 +79,28 @@ def build_mcp(config_path: str | Path) -> FastMCP:
         """Run an allowlisted verification command for a configured project."""
         return runner.run_verification(project_id, command_key, timeout=timeout)
 
+    @mcp.tool
+    def git_commit_and_push(
+        project_id: str,
+        files: list[str],
+        message: str,
+        remote: str = "origin",
+        branch: str = "main",
+        timeout: int = 120,
+    ) -> dict[str, Any]:
+        """Stage selected files, create one local commit, and push it.
+
+        This is a bridge-owned Git operation. It is intended for human-approved
+        acceptance commits after Codex has edited files and ChatGPT has reviewed
+        the patch.
+        """
+        return runner.git_commit_and_push(
+            project_id=project_id,
+            files=files,
+            message=message,
+            remote=remote,
+            branch=branch,
+            timeout=timeout,
+        )
+
     return mcp
