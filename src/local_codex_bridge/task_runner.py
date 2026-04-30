@@ -168,6 +168,96 @@ class TaskRunner:
         cmd = project.verification[command_key]
         return self._run(project.path, cmd, timeout=timeout, max_chars=40000)
 
+    def git_commit_and_push(
+        self,
+        project_id: str,
+        files: list[str],
+        message: str,
+        remote: str = "origin",
+        branch: str = "main",
+        timeout: int = 120,
+    ) -> dict[str, Any]:
+        project = self._project(project_id)
+        repo = project.path
+
+        if not files:
+            return {"status": "blocked_input", "error": "files must not be empty"}
+        if not message.strip():
+            return {"status": "blocked_input", "error": "message must not be empty"}
+        if remote != "origin":
+            return {"status": "blocked_input", "error": "Only remote='origin' is supported"}
+        if branch != "main":
+            return {"status": "blocked_input", "error": "Only branch='main' is supported"}
+
+        resolved_files: list[str] = []
+        for raw in files:
+            candidate = (repo / raw).resolve()
+            try:
+                candidate.relative_to(repo)
+            except ValueError:
+                return {"status": "blocked_input", "error": f"File path escapes project root: {raw}"}
+            if not candidate.exists():
+                return {"status": "blocked_input", "error": f"File does not exist: {raw}"}
+            resolved_files.append(raw)
+
+        before_status = self._run(repo, ["git", "status", "--short", "--branch"], timeout=20)
+        head_before = self._run(repo, ["git", "rev-parse", "HEAD"], timeout=20)
+        remotes = self._run(repo, ["git", "remote", "-v"], timeout=20)
+
+        add = self._run(repo, ["git", "add", *resolved_files], timeout=timeout, max_chars=40000)
+        if add["returncode"] != 0:
+            return {
+                "status": "blocked_add",
+                "before_status": before_status,
+                "head_before": head_before,
+                "remotes": remotes,
+                "add": add,
+            }
+
+        commit = self._run(repo, ["git", "commit", "-m", message], timeout=timeout, max_chars=40000)
+        if commit["returncode"] != 0:
+            return {
+                "status": "blocked_commit",
+                "before_status": before_status,
+                "head_before": head_before,
+                "remotes": remotes,
+                "add": add,
+                "commit": commit,
+                "status_after_commit_failure": self._run(repo, ["git", "status", "--short", "--branch"], timeout=20),
+            }
+
+        commit_hash = self._run(repo, ["git", "rev-parse", "HEAD"], timeout=20)
+        push = self._run(repo, ["git", "push", remote, branch], timeout=timeout, max_chars=40000)
+        final_status = self._run(repo, ["git", "status", "--short", "--branch"], timeout=20)
+        log = self._run(repo, ["git", "log", "-1", "--oneline", "--decorate"], timeout=20)
+
+        if push["returncode"] != 0:
+            return {
+                "status": "blocked_push",
+                "before_status": before_status,
+                "head_before": head_before,
+                "remotes": remotes,
+                "add": add,
+                "commit": commit,
+                "commit_hash": commit_hash,
+                "push": push,
+                "final_status": final_status,
+                "log": log,
+            }
+
+        return {
+            "status": "pushed",
+            "before_status": before_status,
+            "head_before": head_before,
+            "remotes": remotes,
+            "add": add,
+            "commit": commit,
+            "commit_hash": commit_hash,
+            "push": push,
+            "final_status": final_status,
+            "log": log,
+        }
+
     def list_tasks(self, limit: int = 20) -> list[dict[str, Any]]:
         task_dirs = sorted(self.config.server.task_dir.glob("*"), key=lambda p: p.name, reverse=True)
         items = []
