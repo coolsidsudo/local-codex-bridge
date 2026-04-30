@@ -279,7 +279,7 @@ https://example-name.ngrok-free.dev/mcp
 
 Do **not** commit this URL to a repo. Free ngrok URLs are often temporary and should be treated as session-local operational details.
 
-If you use Cloudflare Tunnel or another provider, point it at the same local bridge endpoint, normally `http://127.0.0.1:8765`, and expose the remote HTTPS URL plus `/mcp`.
+If you use Cloudflare Tunnel or another provider, point it at the same local bridge endpoint, normally `http://127.0.0.1:8765`, and expose the remote HTTPS URL plus `/mcp`. For a stable Cloudflare Tunnel setup, see [docs/CLOUDFLARE_TUNNEL.md](docs/CLOUDFLARE_TUNNEL.md).
 
 ## 8. Test the tunnel endpoint
 

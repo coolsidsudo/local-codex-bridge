@@ -54,7 +54,7 @@ When a failure may leave changes staged, the response reports that staged-state 
 
 Tunnels are external deployment layers, not core bridge runtime. The Python bridge serves MCP on the configured host/port, normally `127.0.0.1:8765`.
 
-Temporary/dev tunnel options include ngrok. Cloudflare Tunnel is a preferred/future deployment option for many setups. Tunnel-provider clients such as `cloudflared` and `ngrok` are not Python runtime dependencies of the bridge.
+Temporary/dev tunnel options include ngrok. Cloudflare Tunnel is a preferred/future deployment option for many setups. Tunnel-provider clients such as `cloudflared` and `ngrok` are not Python runtime dependencies of the bridge. For an operational Cloudflare Tunnel outline, see [CLOUDFLARE_TUNNEL.md](CLOUDFLARE_TUNNEL.md).
 
 ChatGPT-side developer MCP errors such as `FORBIDDEN: This conversation does not support developer MCPs` should be treated as platform/conversation gating unless repository evidence proves otherwise. Local Codex Bridge cannot guarantee that code changes in this repo will enable developer MCPs for a gated ChatGPT conversation.
 
