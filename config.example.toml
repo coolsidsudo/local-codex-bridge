@@ -2,6 +2,10 @@
 host = "127.0.0.1"
 port = 8765
 
+# Optional public HTTPS origin for future authenticated deployments.
+# Leave empty/unset for local loopback development.
+# public_base_url = "https://local-codex-bridge.example.com"
+
 # Where bridge task logs are stored.
 task_dir = "~/.local-codex-bridge/tasks"
 
@@ -13,6 +17,22 @@ default_model = "gpt-5.5"
 
 # Optional additional args appended after `codex exec`.
 default_codex_args = ["--json"]
+
+
+# Authentication defaults to auto: no auth is allowed only for loopback local use
+# with no public_base_url. Public/tunnel deployment must configure auth.
+[auth]
+mode = "auto"
+
+# Static bearer is for local/internal/test clients only; it is not the planned
+# public ChatGPT-compatible auth mode. Set the token value in the environment,
+# never in this TOML file.
+#
+# mode = "static_bearer"
+# token_env = "LCB_AUTH_TOKEN"
+# client_id = "local-codex-bridge-static"
+# required_scopes = ["lcb:read"]
+# token_scopes = ["lcb:read", "lcb:write"]
 
 # Example project profile. Replace this with your own local repo.
 [projects.example]

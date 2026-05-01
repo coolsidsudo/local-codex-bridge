@@ -6,9 +6,10 @@ Local Codex Bridge is project-agnostic: configured project roots are trust bound
 
 ## Strong recommendations
 
-- Bind to `127.0.0.1`.
-- Use an authenticated tunnel, private network, or access-controlled reverse proxy before connecting from ChatGPT.
-- Do not expose this server directly to the public internet.
+- Bind to `127.0.0.1` for local development.
+- Do not connect ChatGPT to a public tunnel until LCB auth is configured.
+- Treat Cloudflare Tunnel, ngrok, and reverse proxies as transport only; LCB itself must enforce auth.
+- Do not expose this server directly to the public internet without LCB auth.
 - Configure only the repositories you are willing to let ChatGPT/Codex work on.
 - Keep verification commands allowlisted.
 - Do not add arbitrary shell execution unless you fully understand the risk.
@@ -16,6 +17,17 @@ Local Codex Bridge is project-agnostic: configured project roots are trust bound
 - Use `git_commit_and_push` only after explicit human approval of the exact files and commit message.
 - Keep secrets out of task prompts and logs.
 - Do not publish temporary tunnel URLs in public issues or documentation.
+
+
+## Built-in auth slice 1
+
+LCB auth configuration is now first-class:
+
+- `auth.mode = "auto"` is the default and permits no-auth only for loopback hosts with no `server.public_base_url`.
+- `auth.mode = "disabled"` is explicit no-auth and is also loopback-only with no `server.public_base_url`.
+- `auth.mode = "static_bearer"` uses FastMCP's static bearer verifier with the token read from an environment variable such as `LCB_AUTH_TOKEN`. Token literal values in TOML are intentionally unsupported.
+
+Public-style no-auth configurations fail closed at startup. Static bearer is for local/internal/test clients and does not complete the public ChatGPT-compatible auth story. Public ChatGPT-compatible deployment should use the planned OAuth/OIDC proxy mode in a later slice. Query-string tokens are not supported.
 
 ## Controlled `git_commit_and_push`
 
@@ -60,7 +72,7 @@ ChatGPT-side developer MCP errors such as `FORBIDDEN: This conversation does not
 
 ## Current v0 limitations
 
-- No built-in OAuth.
+- No OAuth/OIDC proxy yet; this is planned for public ChatGPT-compatible deployment.
 - No built-in Cloudflare Access validation.
 - No arbitrary shell tool.
 - No streaming live logs; polling is supported.

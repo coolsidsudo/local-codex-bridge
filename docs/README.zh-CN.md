@@ -101,6 +101,15 @@ ChatGPT 规划 / 审查
 
 Tunnel 是外部部署层，不是 Local Codex Bridge 的 Python runtime 依赖。
 
+## 认证状态
+
+Local Codex Bridge 现在有一等公民的认证配置，并且会对公开式的无认证部署 fail closed。默认 `auth.mode = "auto"` 只允许在 loopback 本地开发且没有 `server.public_base_url` 时无认证运行。显式 `auth.mode = "disabled"` 也只允许 loopback。
+
+Slice 1 还支持 `auth.mode = "static_bearer"`，token 必须来自 `LCB_AUTH_TOKEN` 这类环境变量。该模式只适合本地、内部或测试客户端发送标准 `Authorization: Bearer ...` header；它不是推荐的公开 ChatGPT custom MCP 认证路径。不要使用 query-string token。
+
+计划中的公开 ChatGPT 兼容模式是在后续 slice 中使用 FastMCP 内置认证实现 OAuth/OIDC proxy。在为该部署配置 LCB auth 之前，不要把 ChatGPT 连接到公开 tunnel。Cloudflare Tunnel 和 ngrok 只是传输层；认证必须由 LCB 强制执行。详见 [AUTH.md](AUTH.md)。
+
+
 ## 1. 安装 Local Codex Bridge
 
 ```bash
@@ -279,7 +288,7 @@ https://example-name.ngrok-free.dev/mcp
 
 不要把这个 URL 提交到 repo。免费 ngrok URL 通常是临时的，应当作为当前会话的运行细节处理。
 
-如果使用 Cloudflare Tunnel 或其他 provider，把它指向同一个本地 bridge endpoint（通常是 `http://127.0.0.1:8765`），并将远程 HTTPS URL 加 `/mcp` 暴露给 ChatGPT connector。 稳定的 Cloudflare Tunnel 设置请参考 [CLOUDFLARE_TUNNEL.md](CLOUDFLARE_TUNNEL.md)。
+如果使用 Cloudflare Tunnel 或其他 provider，它只是传输层：把它指向同一个本地 bridge endpoint（通常是 `http://127.0.0.1:8765`）。在 LCB auth 配置完成之前，不要将该公开 URL 用于真实 ChatGPT 工作。稳定的 Cloudflare Tunnel 设置请参考 [CLOUDFLARE_TUNNEL.md](CLOUDFLARE_TUNNEL.md)。
 
 ## 8. 测试 tunnel endpoint
 
@@ -316,7 +325,7 @@ HTTP/2 400
 https://example-name.ngrok-free.dev/mcp
 ```
 
-9. 第一次本地验证可以不设置认证；严肃使用时建议把 tunnel 放在访问控制之后。
+9. 在 LCB auth 配置完成之前，不要将公开 tunnel 用于真实工作。`static_bearer` 仅适合本地/内部/测试；公开 ChatGPT 兼容部署应使用计划中的 OAuth/OIDC proxy 模式。
 10. 保存并连接 connector。
 
 连接后，ChatGPT 设置中应该能看到这些 bridge actions：
@@ -428,13 +437,13 @@ Smoke test only. Do not edit files.
 建议默认做法：
 
 - 只绑定到 `127.0.0.1`。
-- 只通过认证 tunnel、私有网络或带访问控制的反向代理暴露。
+- 不要在没有 LCB auth 的情况下公开暴露；tunnel 只是传输层，不是安全边界。
 - 只配置你愿意让 ChatGPT / Codex 操作的 repo。
 - 验证命令必须 allowlist。
 - 在接受变更前审查 diff 和 verification output。
 - 只对已审查和已批准文件使用 `git_commit_and_push`。
 - 不要在 prompt 中传递 secrets。
-- 不要在公开 issue 或 docs 中发布临时 tunnel URL。
+- 不要在公开 issue 或 docs 中发布临时 tunnel URL、auth 环境变量或 bearer token。
 - 除非完全理解风险，否则不要添加任意 shell 执行能力。
 
 更多信息见 [`SECURITY.md`](SECURITY.md)。

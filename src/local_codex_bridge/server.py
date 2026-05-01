@@ -5,14 +5,15 @@ from typing import Any
 
 from fastmcp import FastMCP
 
+from .auth import build_auth_provider
 from .config import BridgeConfig
 from .task_runner import TaskRunner
 
 
-def build_mcp(config_path: str | Path) -> FastMCP:
-    cfg = BridgeConfig.load(config_path)
+def build_mcp(config: str | Path | BridgeConfig) -> FastMCP:
+    cfg = config if isinstance(config, BridgeConfig) else BridgeConfig.load(config)
     runner = TaskRunner(cfg)
-    mcp = FastMCP("Local Codex Bridge")
+    mcp = FastMCP("Local Codex Bridge", auth=build_auth_provider(cfg))
 
     @mcp.tool
     def list_projects() -> dict[str, Any]:

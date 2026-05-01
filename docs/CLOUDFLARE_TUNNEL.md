@@ -10,9 +10,13 @@ http://127.0.0.1:8765/mcp
 
 ## Security expectations
 
-- Put the public hostname behind Cloudflare Access / Zero Trust protection whenever possible.
+- Cloudflare Tunnel is transport only; it is not the Local Codex Bridge security boundary.
+- Keep the current Cloudflare hostname disabled / unused for real work until LCB auth is configured.
+- Do **not** connect ChatGPT to a public tunnel until LCB auth is configured.
 - Do **not** expose Local Codex Bridge unauthenticated on the public internet.
-- Do **not** commit tunnel URLs, Cloudflare credentials, service tokens, certs, or tunnel credential JSON files.
+- Slice 1 `static_bearer` auth is for local/internal/test clients and does not complete the public ChatGPT-compatible auth story.
+- Public deployment should use the planned OAuth/OIDC proxy mode in a later slice.
+- Do **not** commit tunnel URLs, Cloudflare credentials, service tokens, certs, tokens, or tunnel credential JSON files.
 - Treat the tunnel hostname as operational configuration for a specific environment, not as project source code.
 
 ## Setup outline
@@ -59,7 +63,7 @@ This outline uses a locally managed named tunnel. Adjust commands for your opera
    cloudflared tunnel --config /Users/<you>/.cloudflared/config.yml run TUNNEL_UUID
    ```
 
-8. Use the resulting HTTPS URL plus `/mcp` as the ChatGPT custom MCP connector URL.
+8. After LCB OAuth/OIDC proxy auth is implemented and configured in a later slice, use the resulting HTTPS URL plus `/mcp` as the ChatGPT custom MCP connector URL. Do not use this public endpoint for real ChatGPT work before then.
 
    ```text
    https://local-codex-bridge.example.com/mcp
@@ -122,7 +126,7 @@ Using only the hostname may reach Cloudflare but not the MCP endpoint.
 
 ### Cloudflare Access blocks the connector
 
-Cloudflare Access / Zero Trust protection is strongly recommended, but the connector must be able to satisfy that policy. If ChatGPT cannot authenticate through your Access policy, configure an appropriate service-token or access-control flow for your environment. Do not disable authentication for public exposure unless this is a tightly controlled temporary test.
+Cloudflare Access / Zero Trust protection can be useful, but it is not a replacement for LCB auth. The connector must be able to satisfy the configured auth policy. Do not disable LCB authentication for public exposure. Static bearer is not the planned public ChatGPT-compatible mode; use the later OAuth/OIDC proxy mode for public connector use.
 
 ### ChatGPT developer MCP `FORBIDDEN`
 
