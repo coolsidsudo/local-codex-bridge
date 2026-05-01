@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+import tomllib
 from pathlib import Path
 
 from typer.testing import CliRunner
@@ -207,6 +211,46 @@ def test_dry_run_prints_toml_without_creating_files_or_directories(tmp_path: Pat
     assert not config_path.exists()
     assert not config_dir.exists()
     assert not list(tmp_path.glob("config.toml.bak.*"))
+
+
+def test_dry_run_with_piped_subprocess_input_prints_toml_only(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    project_path = tmp_path / "project"
+    user_input = f"\nsmoke_project\nSmoke Project\n{project_path}\n"
+    env = {
+        **os.environ,
+        "HOME": str(home),
+        "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src"),
+    }
+
+    result = subprocess.run(
+        [sys.executable, "-m", "local_codex_bridge.cli", "init", "--dry-run"],
+        input=user_input,
+        text=True,
+        capture_output=True,
+        cwd=tmp_path,
+        env=env,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.startswith("[server]")
+    parsed = tomllib.loads(result.stdout)
+    assert parsed["auth"]["mode"] == "auto"
+    assert "smoke_project" in parsed["projects"]
+    assert parsed["projects"]["smoke_project"]["path"] == str(project_path)
+    for unexpected in (
+        "Authentication mode",
+        "Choose auth mode",
+        "Project id",
+        "Local Codex Bridge init",
+    ):
+        assert unexpected not in result.stdout
+    assert "Authentication mode" in result.stderr
+    assert "Choose auth mode" in result.stderr
+    assert "Project id" in result.stderr
+    assert not (home / ".local-codex-bridge" / "config.toml").exists()
+    assert not (home / ".local-codex-bridge" / "tasks").exists()
 
 
 def test_dry_run_wins_over_force_without_write_or_backup(tmp_path: Path) -> None:

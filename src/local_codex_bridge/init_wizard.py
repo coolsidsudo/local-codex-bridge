@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import shutil
+import sys
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime
@@ -165,7 +166,7 @@ def prompt_value(label: str, default: str | None, *, prompt_to_stderr: bool) -> 
 
     suffix = f" [{default}]: " if default is not None else ": "
     click.echo(f"{label}{suffix}", nl=False, err=True)
-    value = click.get_text_stream("stdin").readline()
+    value = sys.stdin.readline()
     if value == "":
         raise click.Abort()
     value = value.rstrip("\r\n")
