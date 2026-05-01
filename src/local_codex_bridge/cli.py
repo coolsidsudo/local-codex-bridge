@@ -23,9 +23,15 @@ def serve(
 ) -> None:
     """Start the MCP server over streamable HTTP."""
     cfg = BridgeConfig.load(config)
-    mcp = build_mcp(config)
+    mcp = build_mcp(cfg)
     print(f"[green]Starting Local Codex Bridge[/green] on {cfg.server.host}:{cfg.server.port}")
-    print("[yellow]Do not expose this server publicly without access control.[/yellow]")
+    print(f"[cyan]Auth mode:[/cyan] {cfg.auth.mode}")
+    if cfg.server.public_base_url:
+        print(f"[cyan]Public base URL:[/cyan] {cfg.server.public_base_url}")
+    if cfg.auth.mode in {"auto", "disabled"}:
+        print("[yellow]No authentication is enabled; this mode is for loopback local/private development only.[/yellow]")
+    else:
+        print("[green]Authentication is enabled for the MCP endpoint.[/green]")
     # FastMCP v2 supports streamable HTTP transport.
     # If your installed FastMCP version uses a different API, run:
     #   python -c "import fastmcp; print(fastmcp.__version__)"

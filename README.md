@@ -101,6 +101,15 @@ ChatGPT plans/reviews
 
 Tunnels are external deployment layers. They are not Python runtime dependencies of Local Codex Bridge.
 
+## Authentication status
+
+Local Codex Bridge now has first-class auth configuration and fails closed for public-style no-auth deployments. The default `auth.mode = "auto"` permits no-auth only for loopback local development with no `server.public_base_url`. Explicit `auth.mode = "disabled"` is also loopback-only.
+
+Slice 1 also supports `auth.mode = "static_bearer"` via a token stored in an environment variable such as `LCB_AUTH_TOKEN`. This is for local/internal/test clients that can send `Authorization: Bearer ...`; it is not the recommended public ChatGPT custom MCP path. Do not use query-string tokens.
+
+The planned public ChatGPT-compatible mode is OAuth/OIDC proxy auth using FastMCP built-in auth in a later slice. Do not connect ChatGPT to a public tunnel until LCB auth is configured for that deployment. Cloudflare Tunnel and ngrok are transport only; LCB must enforce auth. See [docs/AUTH.md](docs/AUTH.md).
+
+
 ## 1. Install Local Codex Bridge
 
 ```bash
@@ -279,7 +288,7 @@ https://example-name.ngrok-free.dev/mcp
 
 Do **not** commit this URL to a repo. Free ngrok URLs are often temporary and should be treated as session-local operational details.
 
-If you use Cloudflare Tunnel or another provider, point it at the same local bridge endpoint, normally `http://127.0.0.1:8765`, and expose the remote HTTPS URL plus `/mcp`. For a stable Cloudflare Tunnel setup, see [docs/CLOUDFLARE_TUNNEL.md](docs/CLOUDFLARE_TUNNEL.md).
+If you use Cloudflare Tunnel or another provider, treat it as transport only: point it at the same local bridge endpoint, normally `http://127.0.0.1:8765`. Do not use the public URL for real ChatGPT work until LCB auth is configured. For a stable Cloudflare Tunnel setup, see [docs/CLOUDFLARE_TUNNEL.md](docs/CLOUDFLARE_TUNNEL.md).
 
 ## 8. Test the tunnel endpoint
 
@@ -316,7 +325,7 @@ In ChatGPT web:
 https://example-name.ngrok-free.dev/mcp
 ```
 
-9. Use no authentication for a first local proof, or put the tunnel behind access control for serious use.
+9. Do not use a public tunnel for real work until LCB auth is configured. Static bearer is local/internal/test only; public ChatGPT-compatible deployment should use the planned OAuth/OIDC proxy mode.
 10. Save/connect the connector.
 
 After connecting, ChatGPT settings should show the bridge actions, including:
@@ -428,13 +437,13 @@ This bridge can cause local Codex to modify files in configured repositories and
 Recommended defaults:
 
 - Bind the bridge to `127.0.0.1`.
-- Expose it only through an authenticated or private tunnel.
+- Do not expose it publicly without LCB auth configured; tunnels are transport only and are not the security boundary.
 - Configure only repos you are willing to let ChatGPT/Codex work on.
 - Keep verification commands allowlisted.
 - Review diffs and verification output before accepting changes.
 - Use `git_commit_and_push` only for reviewed and approved files.
 - Do not pass secrets in prompts.
-- Do not publish temporary tunnel URLs in public issues or docs.
+- Do not publish temporary tunnel URLs, auth env vars, or bearer tokens in public issues or docs.
 - Do not add arbitrary shell execution unless you fully understand the risk.
 
 See [`docs/SECURITY.md`](docs/SECURITY.md) for more detail.
