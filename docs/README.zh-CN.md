@@ -128,7 +128,7 @@ uv tool install "git+https://github.com/coolsidsudo/local-codex-bridge.git@v0.1.
 local-codex-bridge --help
 ```
 
-通过 tag 安装不会自动创建 `~/.local-codex-bridge/config.toml`。请从 repository checkout 或 GitHub source archive 复制 `config.example.toml`，再根据你的本地项目 profiles 和认证设置进行编辑。
+`v0.1.0` 的 tag 安装不会自动创建 `~/.local-codex-bridge/config.toml`。`v0.1.0` 之后的版本包含 `local-codex-bridge init`，这是推荐的配置路径。如果你安装的版本还没有 `init`，请使用下面的手动 `config.example.toml` 备用流程。
 
 如果是 contributor / development 工作，请使用 clone 和 editable install：
 
@@ -182,7 +182,16 @@ codex --version
 
 ## 3. 配置项目 profiles
 
-创建配置文件：
+对于包含 init wizard 的版本，推荐运行：
+
+```bash
+local-codex-bridge init --config ~/.local-codex-bridge/config.toml
+local-codex-bridge doctor --config ~/.local-codex-bridge/config.toml
+```
+
+`init` 会一步步写入通用的项目配置，保持 server 默认只绑定 loopback，询问一个项目 profile，并且默认只 allowlist 安全的 `git_status` 验证命令。它不会启动 MCP、运行 Codex、联系 OIDC provider、收集 secrets，也不会把 token / client secret 值写入 TOML。对于 OIDC 或 static bearer，它只写入环境变量名称，并打印带占位符的 export 示例。
+
+高级 / 手动备用流程（也适用于 `v0.1.0` 安装）：
 
 ```bash
 mkdir -p ~/.local-codex-bridge

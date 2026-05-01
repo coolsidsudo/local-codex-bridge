@@ -4,6 +4,17 @@ Local Codex Bridge can start local Codex tasks and inspect configured repositori
 
 Auth is configured in `config.toml` under `[auth]`.
 
+## Using `local-codex-bridge init`
+
+Versions after `v0.1.0` include an interactive setup wizard:
+
+```bash
+local-codex-bridge init --config ~/.local-codex-bridge/config.toml
+local-codex-bridge doctor --config ~/.local-codex-bridge/config.toml
+```
+
+`init` asks which auth mode to configure and writes only environment variable names for OIDC or static bearer credentials. It does not collect bearer tokens, OIDC client IDs, or OIDC client secrets, and it does not contact your identity provider. Set the real credential values in your shell environment before running `serve`.
+
 ## Recommended public mode: `oidc_proxy`
 
 For public ChatGPT custom MCP use, use FastMCP's built-in OIDC proxy mode:

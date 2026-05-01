@@ -7,6 +7,7 @@ import typer
 from rich import print
 
 from .config import BridgeConfig
+from .init_wizard import run_init_wizard
 from .server import build_mcp
 from .task_runner import TaskRunner
 
@@ -34,6 +35,29 @@ def _print_env_status(label: str, env_name: str) -> bool:
     color = "green" if is_set else "red"
     print(f"[cyan]{label}:[/cyan] {env_name} ([{color}]{status}[/{color}])")
     return is_set
+
+
+@app.command("init")
+def init_config(
+    config: Path = typer.Option(
+        DEFAULT_CONFIG,
+        "--config",
+        "-c",
+        help="Path to write bridge config TOML.",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Print generated TOML without writing files.",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Overwrite an existing config after creating a timestamped backup.",
+    ),
+) -> None:
+    """Interactively create a Local Codex Bridge config file."""
+    run_init_wizard(config, dry_run=dry_run, force=force)
 
 
 @app.command()

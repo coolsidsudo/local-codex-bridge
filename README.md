@@ -128,7 +128,7 @@ uv tool install "git+https://github.com/coolsidsudo/local-codex-bridge.git@v0.1.
 local-codex-bridge --help
 ```
 
-Tag installs do not automatically create `~/.local-codex-bridge/config.toml`. Copy `config.example.toml` from the repository checkout or GitHub source archive, then edit it for your local project profiles and auth settings.
+Tag installs for `v0.1.0` do not automatically create `~/.local-codex-bridge/config.toml`. Versions after `v0.1.0` include `local-codex-bridge init`, which is the recommended setup path. If your installed version does not have `init`, use the manual `config.example.toml` fallback below.
 
 For contributor/development work, use a clone and editable install:
 
@@ -182,7 +182,16 @@ If your local Codex CLI does not support `gpt-5.5`, use the exact model id your 
 
 ## 3. Configure project profiles
 
-Create a config file:
+Recommended for versions that include the init wizard:
+
+```bash
+local-codex-bridge init --config ~/.local-codex-bridge/config.toml
+local-codex-bridge doctor --config ~/.local-codex-bridge/config.toml
+```
+
+`init` writes a project-agnostic config step by step, keeps server defaults loopback-local, asks for one project profile, and only allowlists a safe `git_status` verification command by default. It does not start MCP, run Codex, contact your OIDC provider, collect secrets, or write token/client-secret values to TOML. For OIDC or static bearer auth it writes environment variable names only and prints placeholder export examples.
+
+Advanced/manual fallback, including for `v0.1.0` installs:
 
 ```bash
 mkdir -p ~/.local-codex-bridge

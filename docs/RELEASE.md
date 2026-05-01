@@ -54,16 +54,18 @@ After the tag exists, test pinned installs in a fresh environment. Replace `vX.Y
 ```bash
 pipx install "git+https://github.com/coolsidsudo/local-codex-bridge.git@vX.Y.Z"
 local-codex-bridge --help
+printf '\nrelease_smoke\nRelease Smoke\n~/Projects/release-smoke\n' | local-codex-bridge init --dry-run
 pipx uninstall local-codex-bridge
 ```
 
 ```bash
 uv tool install "git+https://github.com/coolsidsudo/local-codex-bridge.git@vX.Y.Z"
 local-codex-bridge --help
+printf '\nrelease_smoke\nRelease Smoke\n~/Projects/release-smoke\n' | local-codex-bridge init --dry-run
 uv tool uninstall local-codex-bridge
 ```
 
-Tag installs do not create `~/.local-codex-bridge/config.toml`. Copy `config.example.toml` from the repository checkout or source archive, then edit it for the operator's own project profiles and auth settings.
+For releases that include the init wizard, `local-codex-bridge init` is the recommended config creation path. Tag installs still do not create `~/.local-codex-bridge/config.toml` automatically; use `init` or copy `config.example.toml` from the repository checkout/source archive, then edit it for the operator's own project profiles and auth settings.
 
 ## Tagging steps
 
