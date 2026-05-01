@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.1.0] - Unreleased
+## [0.1.0] - 2026-05-01
 
 Initial release-readiness baseline for the first tagged Local Codex Bridge release.
 Replace `Unreleased` with the actual release date before tagging.
