@@ -2,9 +2,22 @@
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-05-02
+
 ### Added
 
 - `local-codex-bridge init` interactive setup wizard for generating a safe starter config and directing users to `doctor`.
+
+### Fixed
+
+- Piped `local-codex-bridge init --dry-run` now keeps generated TOML on stdout while prompts go to stderr.
+
+### Known limitations
+
+- No native OAuth server.
+- No npm wrapper.
+- No PyPI publication yet.
+- No PR/merge tools yet.
 
 ## [0.1.0] - 2026-05-01
 

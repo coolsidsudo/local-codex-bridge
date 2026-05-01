@@ -10,7 +10,7 @@ This checklist is for maintainers preparing a tagged Local Codex Bridge release.
   git status --short --branch
   ```
 
-- Confirm you are on the intended release branch, normally `main` for the first release:
+- Confirm you are on the intended release branch, normally `main` for tagged releases:
 
   ```bash
   git branch --show-current
@@ -117,4 +117,4 @@ These are instructions only; do not run them during ordinary release-readiness w
 - Do not add release upload, package publishing, deployment, tagging, or GitHub release automation to CI.
 - Do not include real tunnel URLs, tokens, OIDC client IDs, OIDC client secrets, or service credentials in release notes or docs.
 - Do not weaken auth defaults or change runtime/tool behavior as part of release documentation work.
-- Do not add init wizard, PR/merge tools, or downstream-project-specific assumptions in this slice.
+- Do not add PR/merge tools, unrelated runtime behavior, or downstream-project-specific assumptions in this slice.

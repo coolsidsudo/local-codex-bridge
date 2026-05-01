@@ -6,7 +6,7 @@ Auth is configured in `config.toml` under `[auth]`.
 
 ## Using `local-codex-bridge init`
 
-Versions after `v0.1.0` include an interactive setup wizard:
+Versions `v0.2.0` and later include an interactive setup wizard:
 
 ```bash
 local-codex-bridge init --config ~/.local-codex-bridge/config.toml
