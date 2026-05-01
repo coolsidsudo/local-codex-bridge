@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlparse
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
 
 try:
     import tomllib  # Python 3.11+
@@ -135,9 +135,12 @@ class BridgeConfig(BaseModel):
     auth: AuthConfig = Field(default_factory=AuthConfig)
 
     @model_validator(mode="after")
-    def validate_auth_exposure(self) -> "BridgeConfig":
+    def validate_auth_exposure(self, info: ValidationInfo) -> "BridgeConfig":
         public_base_url = self.server.public_base_url
         mode = self.auth.mode
+        skip_runtime_env_checks = bool(
+            info.context and info.context.get("skip_runtime_env_checks")
+        )
 
         if mode in {"auto", "disabled"}:
             if public_base_url:
@@ -152,7 +155,11 @@ class BridgeConfig(BaseModel):
                     "(127.0.0.1, localhost, or ::1); configure auth before binding publicly"
                 )
 
-        if mode == "static_bearer" and not os.environ.get(self.auth.token_env, "").strip():
+        if (
+            mode == "static_bearer"
+            and not skip_runtime_env_checks
+            and not os.environ.get(self.auth.token_env, "").strip()
+        ):
             raise ValueError(
                 "auth.mode='static_bearer' requires non-empty env var "
                 f"{self.auth.token_env}"
@@ -169,12 +176,18 @@ class BridgeConfig(BaseModel):
                     "auth.mode='oidc_proxy' requires provider_config_url "
                     "set to an HTTPS OpenID configuration URL"
                 )
-            if not os.environ.get(self.auth.client_id_env, "").strip():
+            if (
+                not skip_runtime_env_checks
+                and not os.environ.get(self.auth.client_id_env, "").strip()
+            ):
                 raise ValueError(
                     "auth.mode='oidc_proxy' requires non-empty env var "
                     f"{self.auth.client_id_env}"
                 )
-            if not os.environ.get(self.auth.client_secret_env, "").strip():
+            if (
+                not skip_runtime_env_checks
+                and not os.environ.get(self.auth.client_secret_env, "").strip()
+            ):
                 raise ValueError(
                     "auth.mode='oidc_proxy' requires non-empty env var "
                     f"{self.auth.client_secret_env}"
@@ -204,11 +217,30 @@ class BridgeConfig(BaseModel):
             )
 
     @classmethod
-    def load(cls, path: str | Path) -> "BridgeConfig":
+    def _load(
+        cls,
+        path: str | Path,
+        *,
+        create_task_dir: bool,
+        skip_runtime_env_checks: bool,
+    ) -> "BridgeConfig":
         config_path = Path(path).expanduser().resolve()
         with config_path.open("rb") as f:
             raw: dict[str, Any] = tomllib.load(f)
         cls._reject_token_literals(raw)
-        cfg = cls.model_validate(raw)
-        cfg.server.task_dir.mkdir(parents=True, exist_ok=True)
+        cfg = cls.model_validate(
+            raw,
+            context={"skip_runtime_env_checks": skip_runtime_env_checks},
+        )
+        if create_task_dir:
+            cfg.server.task_dir.mkdir(parents=True, exist_ok=True)
         return cfg
+
+    @classmethod
+    def load(cls, path: str | Path) -> "BridgeConfig":
+        return cls._load(path, create_task_dir=True, skip_runtime_env_checks=False)
+
+    @classmethod
+    def load_for_doctor(cls, path: str | Path) -> "BridgeConfig":
+        """Load config for diagnostics without checking secret env var presence."""
+        return cls._load(path, create_task_dir=False, skip_runtime_env_checks=True)

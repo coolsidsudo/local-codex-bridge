@@ -42,6 +42,16 @@ Do not put OIDC client IDs or client secrets directly in TOML. LCB intentionally
 
 FastMCP's OIDC proxy publishes the OAuth/OIDC support endpoints and uses `/auth/callback` by default. Local Codex Bridge does not implement a native OAuth server.
 
+### Check your setup
+
+Run doctor before starting the server:
+
+```bash
+local-codex-bridge doctor --config ~/.local-codex-bridge/config.toml
+```
+
+Doctor validates the config without starting MCP, running Codex, constructing FastMCP `OIDCProxy`, or fetching provider metadata. It prints the ChatGPT connector URL, IdP redirect URI, provider config URL, and whether required credential environment variables are set. It prints environment variable names only, never bearer tokens, OIDC client IDs, or OIDC client secrets.
+
 ## Local development modes
 
 ### `auto` default

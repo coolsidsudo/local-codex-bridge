@@ -206,7 +206,17 @@ build = ["npm", "run", "build"]
 
 每个本地 repo 使用一个项目 profile。Bridge 应保持通用，不应在 bridge 源码中硬编码某个具体项目的逻辑。
 
-## 4. 本地启动 bridge
+## 4. 用 doctor 检查认证 / 设置
+
+启动服务器前，先运行：
+
+```bash
+local-codex-bridge doctor --config ~/.local-codex-bridge/config.toml
+```
+
+`doctor` 会验证配置，但不会启动 MCP、运行 Codex，也不会联系你的 identity provider。对于 `auth.mode = "oidc_proxy"`，它会打印 ChatGPT connector URL、IdP redirect URI、provider config URL，以及已配置的 OIDC credential 环境变量是否已设置。它只打印环境变量名称，绝不会打印 bearer token、OIDC client ID 或 OIDC client secret 的值。
+
+## 5. 本地启动 bridge
 
 在终端 1 中运行：
 
@@ -225,7 +235,7 @@ on http://127.0.0.1:8765/mcp
 
 保持这个终端开启。
 
-## 5. 测试本地 MCP endpoint
+## 6. 测试本地 MCP endpoint
 
 在另一个终端运行：
 
@@ -243,7 +253,7 @@ HTTP/1.1 406 Not Acceptable
 {"jsonrpc":"2.0","id":"server-error","error":{"code":-32600,"message":"Not Acceptable: Client must accept text/event-stream"}}
 ```
 
-## 6. 安装并配置 ngrok
+## 7. 安装并配置 ngrok
 
 ngrok 是一种临时 / 开发 tunnel 选项。Cloudflare Tunnel 也是很多场景下偏好的 / 未来可选部署方式。Tunnel 客户端属于外部部署工具；Local Codex Bridge 的 Python runtime 不依赖 `ngrok`、`cloudflared` 或任何 tunnel provider package。
 
@@ -266,7 +276,7 @@ ngrok config add-authtoken YOUR_NGROK_TOKEN
 Authtoken saved to configuration file: /Users/<you>/Library/Application Support/ngrok/ngrok.yml
 ```
 
-## 7. 启动 HTTPS tunnel
+## 8. 启动 HTTPS tunnel
 
 保持 bridge server 运行，在终端 2 中运行：
 
@@ -290,7 +300,7 @@ https://example-name.ngrok-free.dev/mcp
 
 如果使用 Cloudflare Tunnel 或其他 provider，它只是传输层：把它指向同一个本地 bridge endpoint（通常是 `http://127.0.0.1:8765`）。公开 ChatGPT 工作应配置 LCB `auth.mode = "oidc_proxy"`；LCB auth 才是安全边界。稳定的 Cloudflare Tunnel 设置请参考 [CLOUDFLARE_TUNNEL.md](CLOUDFLARE_TUNNEL.md)。
 
-## 8. 测试 tunnel endpoint
+## 9. 测试 tunnel endpoint
 
 在第三个终端运行：
 
@@ -308,7 +318,7 @@ HTTP/2 400
 
 这表示 HTTPS tunnel 已经能到达 MCP server。真正的 MCP client 会处理 session setup；curl 不会。
 
-## 9. 认证值分别填在哪里
+## 10. 认证值分别填在哪里
 
 对于 `auth.mode = "oidc_proxy"`：
 
@@ -319,7 +329,7 @@ HTTP/2 400
 
 `example.com` 域名和 `YOUR-...` 值只是占位符，并不存在；请替换为你的真实值。
 
-## 10. 在 ChatGPT 中添加 custom MCP connector
+## 11. 在 ChatGPT 中添加 custom MCP connector
 
 在 ChatGPT Web 中：
 
@@ -355,7 +365,7 @@ git_commit_and_push
 
 ChatGPT 侧 developer MCP 错误，例如 `FORBIDDEN: This conversation does not support developer MCPs`，应视为平台 / conversation gating。Local Codex Bridge 不能保证通过修改 bridge 代码来解除这个平台限制。
 
-## 11. 在聊天中选择 connector
+## 12. 在聊天中选择 connector
 
 在新的或刷新后的 ChatGPT 聊天中：
 
@@ -371,7 +381,7 @@ Use Local Codex Bridge and list configured projects.
 
 健康的响应应该显示你配置的项目 profiles。
 
-## 12. 不修改文件的项目 smoke test
+## 13. 不修改文件的项目 smoke test
 
 让 ChatGPT 通过 bridge 执行这个流程：
 
@@ -392,7 +402,7 @@ Smoke test only. Do not edit files.
 7. Call get_git_diff and confirm no files changed.
 ```
 
-## 13. 日常使用检查清单
+## 14. 日常使用检查清单
 
 开始真正实现任务之前：
 
@@ -413,7 +423,7 @@ Smoke test only. Do not edit files.
 14. 确认返回的 branch、remote、commit、push output 和 final status。
 ```
 
-## 14. 常见问题
+## 15. 常见问题
 
 ### `curl /mcp` 返回 406 或 400
 
@@ -441,7 +451,7 @@ Smoke test only. Do not edit files.
 
 阅读结构化 diagnostics。常见原因包括空文件列表、空 commit message、非 `origin` remote、branch mismatch、路径逃逸项目根目录、未批准的预先 staged 文件，或 staged 文件与已批准文件列表不完全一致。重试前请检查 git 状态，尤其是在失败操作可能留下已批准变更 staged 的情况下。
 
-## 15. 安全说明
+## 16. 安全说明
 
 这个 bridge 可以让本地 Codex 修改已配置仓库中的文件，并且在明确人工批准后可以执行受控 acceptance commit/push。请把它当作强大的本地自动化工具。
 

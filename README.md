@@ -206,7 +206,17 @@ build = ["npm", "run", "build"]
 
 Use one project profile per repo. The bridge is intentionally generic; do not hardcode project-specific behavior into bridge source code.
 
-## 4. Run the bridge locally
+## 4. Check auth/setup with doctor
+
+Before starting the server, run:
+
+```bash
+local-codex-bridge doctor --config ~/.local-codex-bridge/config.toml
+```
+
+`doctor` validates the config without starting MCP, running Codex, or contacting your identity provider. For `auth.mode = "oidc_proxy"`, it prints the ChatGPT connector URL, IdP redirect URI, provider config URL, and whether the configured OIDC credential environment variables are set. It prints environment variable names only, never bearer tokens, OIDC client IDs, or OIDC client secrets.
+
+## 5. Run the bridge locally
 
 In terminal 1:
 
@@ -225,7 +235,7 @@ on http://127.0.0.1:8765/mcp
 
 Keep this terminal open.
 
-## 5. Test the local MCP endpoint
+## 6. Test the local MCP endpoint
 
 In another terminal:
 
@@ -243,7 +253,7 @@ HTTP/1.1 406 Not Acceptable
 {"jsonrpc":"2.0","id":"server-error","error":{"code":-32600,"message":"Not Acceptable: Client must accept text/event-stream"}}
 ```
 
-## 6. Install and configure ngrok
+## 7. Install and configure ngrok
 
 ngrok is one temporary/dev tunnel option. Cloudflare Tunnel is also a preferred/future deployment option for many setups. Tunnel clients are external deployment tools; Local Codex Bridge does not depend on `ngrok`, `cloudflared`, or any tunnel provider package at Python runtime.
 
@@ -266,7 +276,7 @@ The command should report something like:
 Authtoken saved to configuration file: /Users/<you>/Library/Application Support/ngrok/ngrok.yml
 ```
 
-## 7. Start an HTTPS tunnel
+## 8. Start an HTTPS tunnel
 
 In terminal 2, while the bridge server is still running:
 
@@ -290,7 +300,7 @@ Do **not** commit this URL to a repo. Free ngrok URLs are often temporary and sh
 
 If you use Cloudflare Tunnel or another provider, treat it as transport only: point it at the same local bridge endpoint, normally `http://127.0.0.1:8765`. For public ChatGPT work, configure LCB `auth.mode = "oidc_proxy"`; LCB auth is the security boundary. For a stable Cloudflare Tunnel setup, see [docs/CLOUDFLARE_TUNNEL.md](docs/CLOUDFLARE_TUNNEL.md).
 
-## 8. Test the tunnel endpoint
+## 9. Test the tunnel endpoint
 
 In a third terminal:
 
@@ -308,7 +318,7 @@ HTTP/2 400
 
 That means the HTTPS tunnel reaches the MCP server. A real MCP client will manage session setup; curl does not.
 
-## 9. What auth values go where
+## 10. What auth values go where
 
 For `auth.mode = "oidc_proxy"`:
 
@@ -319,7 +329,7 @@ For `auth.mode = "oidc_proxy"`:
 
 `example.com` domains and `YOUR-...` values are placeholders. They do not exist; replace them with your real values.
 
-## 10. Add the bridge as a ChatGPT custom MCP connector
+## 11. Add the bridge as a ChatGPT custom MCP connector
 
 In ChatGPT web:
 
@@ -355,7 +365,7 @@ git_commit_and_push
 
 ChatGPT-side developer MCP errors such as `FORBIDDEN: This conversation does not support developer MCPs` are platform/conversation gating. Local Codex Bridge cannot guarantee that bridge-code changes will enable developer MCPs for a gated ChatGPT conversation.
 
-## 11. Select the connector in a chat
+## 12. Select the connector in a chat
 
 In a new or refreshed ChatGPT chat:
 
@@ -371,7 +381,7 @@ Use Local Codex Bridge and list configured projects.
 
 A healthy response should show your configured project profiles.
 
-## 12. Smoke test a project without editing files
+## 13. Smoke test a project without editing files
 
 Ask ChatGPT to run this sequence through the bridge:
 
@@ -392,7 +402,7 @@ Smoke test only. Do not edit files.
 7. Call get_git_diff and confirm no files changed.
 ```
 
-## 13. Normal operating checklist
+## 14. Normal operating checklist
 
 Before starting real implementation work:
 
@@ -413,7 +423,7 @@ Before starting real implementation work:
 14. Confirm the returned branch, remote, commit, push output, and final status.
 ```
 
-## 14. Common issues
+## 15. Common issues
 
 ### `curl /mcp` returns 406 or 400
 
@@ -441,7 +451,7 @@ Stop and inspect before starting Codex. The bridge intentionally makes dirty sta
 
 Read the structured diagnostics. Common causes include an empty file list, blank commit message, a non-`origin` remote, a branch mismatch, path escaping the project root, unapproved pre-staged files, or staged files that do not exactly match the approved file list. Inspect git state before retrying, especially if a failed operation may have left approved changes staged.
 
-## 15. Security notes
+## 16. Security notes
 
 This bridge can cause local Codex to modify files in configured repositories and can perform a controlled acceptance commit/push after explicit human approval. Treat it as powerful local automation.
 
