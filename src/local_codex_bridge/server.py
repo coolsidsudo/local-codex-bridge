@@ -68,7 +68,7 @@ def build_mcp(config: str | Path | BridgeConfig) -> FastMCP:
 
     @mcp.tool
     def get_git_diff(project_id: str, max_chars: int = 30000) -> dict[str, Any]:
-        """Return git status, diff stat, and diff for a configured project."""
+        """Return git status plus staged, unstaged, and bounded untracked review evidence."""
         return runner.git_diff(project_id, max_chars=max_chars)
 
     @mcp.tool

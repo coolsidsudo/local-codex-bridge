@@ -13,6 +13,12 @@ from typing import Any
 from .config import BridgeConfig, ProjectConfig
 
 
+UNTRACKED_LIST_MAX_FILES = 200
+UNTRACKED_PREVIEW_MAX_FILES = 20
+UNTRACKED_PREVIEW_MAX_BYTES_PER_FILE = 4096
+UNTRACKED_PREVIEW_MAX_TOTAL_CHARS = 12000
+
+
 @dataclass
 class TaskRecord:
     task_id: str
@@ -154,9 +160,33 @@ class TaskRunner:
     def git_diff(self, project_id: str, max_chars: int = 30000) -> dict[str, Any]:
         project = self._project(project_id)
         status = self._run(project.path, ["git", "status", "--short", "--branch"], timeout=20)
-        stat = self._run(project.path, ["git", "diff", "--stat"], timeout=20)
-        diff = self._run(project.path, ["git", "diff"], timeout=20, max_chars=max_chars)
-        return {"status": status, "stat": stat, "diff": diff}
+        unstaged_stat = self._run(project.path, ["git", "diff", "--stat"], timeout=20)
+        unstaged_diff = self._run(project.path, ["git", "diff"], timeout=20, max_chars=max_chars)
+        staged_stat = self._run(project.path, ["git", "diff", "--cached", "--stat"], timeout=20)
+        staged_diff = self._run(
+            project.path,
+            ["git", "diff", "--cached"],
+            timeout=20,
+            max_chars=max_chars,
+        )
+        untracked_files = self._untracked_files(project.path)
+        untracked_previews = self._untracked_previews(
+            project.path,
+            untracked_files["files"],
+            max_chars=max_chars,
+            enabled=untracked_files["returncode"] == 0,
+        )
+        return {
+            "status": status,
+            "stat": unstaged_stat,
+            "diff": unstaged_diff,
+            "unstaged_stat": unstaged_stat,
+            "unstaged_diff": unstaged_diff,
+            "staged_stat": staged_stat,
+            "staged_diff": staged_diff,
+            "untracked_files": untracked_files,
+            "untracked_previews": untracked_previews,
+        }
 
     def run_verification(self, project_id: str, command_key: str, timeout: int = 600) -> dict[str, Any]:
         project = self._project(project_id)
@@ -385,6 +415,198 @@ class TaskRunner:
             result["files"] = []
         return result
 
+    def _untracked_files(self, repo: Path) -> dict[str, Any]:
+        cmd = ["git", "ls-files", "--others", "--exclude-standard", "-z"]
+        proc = subprocess.run(
+            cmd,
+            cwd=str(repo),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=20,
+            shell=False,
+        )
+
+        files: list[str] = []
+        omitted_count = 0
+        if proc.returncode == 0:
+            for raw_path in proc.stdout.split(b"\0"):
+                if not raw_path:
+                    continue
+                try:
+                    path = raw_path.decode("utf-8")
+                except UnicodeDecodeError:
+                    omitted_count += 1
+                    continue
+                if not self._is_repo_relative_git_path(repo, path):
+                    omitted_count += 1
+                    continue
+                if len(files) < UNTRACKED_LIST_MAX_FILES:
+                    files.append(path)
+                else:
+                    omitted_count += 1
+
+        return {
+            "cmd": cmd,
+            "returncode": proc.returncode,
+            "stderr": proc.stderr.decode("utf-8", errors="replace"),
+            "files": files,
+            "truncated": omitted_count > 0,
+            "omitted_count": omitted_count,
+            "max_files": UNTRACKED_LIST_MAX_FILES,
+        }
+
+    def _untracked_previews(
+        self,
+        repo: Path,
+        files: list[str],
+        max_chars: int,
+        enabled: bool,
+    ) -> dict[str, Any]:
+        max_total_chars = max(0, min(max_chars, UNTRACKED_PREVIEW_MAX_TOTAL_CHARS))
+        limits = {
+            "max_files": UNTRACKED_PREVIEW_MAX_FILES,
+            "max_bytes_per_file": UNTRACKED_PREVIEW_MAX_BYTES_PER_FILE,
+            "max_total_chars": max_total_chars,
+        }
+        if not enabled:
+            return {
+                "enabled": False,
+                "limits": limits,
+                "items": [],
+                "truncated": False,
+                "omitted_count": 0,
+            }
+
+        items: list[dict[str, Any]] = []
+        used_chars = 0
+        omitted_count = max(0, len(files) - UNTRACKED_PREVIEW_MAX_FILES)
+        truncated = omitted_count > 0
+
+        for path in files[:UNTRACKED_PREVIEW_MAX_FILES]:
+            candidate_result = self._untracked_preview_candidate(repo, path)
+            if candidate_result["status"] != "ok":
+                items.append(
+                    {
+                        "path": path,
+                        "status": "skipped",
+                        "reason": candidate_result["reason"],
+                    }
+                )
+                continue
+
+            candidate = candidate_result["path"]
+            preview = self._read_untracked_preview(candidate)
+            if preview["status"] != "included":
+                items.append({"path": path, "status": "skipped", "reason": preview["reason"]})
+                continue
+
+            text = preview["text"]
+            file_truncated = preview["truncated"]
+            remaining_chars = max_total_chars - used_chars
+            if remaining_chars <= 0:
+                items.append(
+                    {
+                        "path": path,
+                        "status": "skipped",
+                        "reason": "total_preview_budget_exhausted",
+                    }
+                )
+                truncated = True
+                continue
+            if len(text) > remaining_chars:
+                text = text[:remaining_chars]
+                file_truncated = True
+                truncated = True
+
+            used_chars += len(text)
+            items.append(
+                {
+                    "path": path,
+                    "status": "included",
+                    "text": text,
+                    "truncated": file_truncated,
+                    "bytes_read": preview["bytes_read"],
+                    "chars": len(text),
+                }
+            )
+
+        return {
+            "enabled": True,
+            "limits": limits,
+            "items": items,
+            "truncated": truncated,
+            "omitted_count": omitted_count,
+        }
+
+    def _is_repo_relative_git_path(self, repo: Path, path: str) -> bool:
+        if not path.strip():
+            return False
+        raw_path = Path(path)
+        if raw_path.is_absolute():
+            return False
+        resolved = (repo / raw_path).resolve(strict=False)
+        try:
+            resolved.relative_to(repo)
+        except ValueError:
+            return False
+        return True
+
+    def _untracked_preview_candidate(self, repo: Path, path: str) -> dict[str, Any]:
+        if not path.strip():
+            return {"status": "skipped", "reason": "empty_path"}
+        raw_path = Path(path)
+        if raw_path.is_absolute():
+            return {"status": "skipped", "reason": "absolute_path"}
+
+        candidate = repo / raw_path
+        if candidate.is_symlink():
+            return {"status": "skipped", "reason": "symlink"}
+
+        resolved = candidate.resolve(strict=False)
+        try:
+            resolved.relative_to(repo)
+        except ValueError:
+            return {"status": "skipped", "reason": "outside_repo"}
+
+        if not candidate.exists():
+            return {"status": "skipped", "reason": "missing"}
+        if candidate.is_dir():
+            return {"status": "skipped", "reason": "directory"}
+        if not candidate.is_file():
+            return {"status": "skipped", "reason": "non_regular_file"}
+        return {"status": "ok", "path": candidate}
+
+    def _read_untracked_preview(self, path: Path) -> dict[str, Any]:
+        try:
+            file_size = path.stat().st_size
+            with path.open("rb") as handle:
+                sample = handle.read(UNTRACKED_PREVIEW_MAX_BYTES_PER_FILE)
+        except OSError:
+            return {"status": "skipped", "reason": "unreadable"}
+
+        truncated = file_size > len(sample)
+        if b"\0" in sample:
+            return {"status": "skipped", "reason": "binary"}
+
+        try:
+            text = sample.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            if truncated and exc.start >= len(sample) - 4:
+                try:
+                    text = sample[: exc.start].decode("utf-8")
+                except UnicodeDecodeError:
+                    return {"status": "skipped", "reason": "utf8_decode_failed"}
+                truncated = True
+            else:
+                return {"status": "skipped", "reason": "utf8_decode_failed"}
+
+        return {
+            "status": "included",
+            "text": text,
+            "truncated": truncated,
+            "bytes_read": len(sample),
+        }
+
     def _status_from_pid(self, rec: TaskRecord) -> str:
         return self._status_from_pid_path(rec.pid_path)
 
@@ -413,6 +635,7 @@ class TaskRunner:
         timeout: int,
         max_chars: int = 20000,
     ) -> dict[str, Any]:
+        max_chars = max(0, max_chars)
         proc = subprocess.run(
             cmd,
             cwd=str(cwd),
@@ -422,8 +645,8 @@ class TaskRunner:
             timeout=timeout,
             shell=False,
         )
-        stdout = proc.stdout[-max_chars:]
-        stderr = proc.stderr[-max_chars:]
+        stdout = proc.stdout[-max_chars:] if max_chars else ""
+        stderr = proc.stderr[-max_chars:] if max_chars else ""
         return {
             "cmd": cmd,
             "returncode": proc.returncode,

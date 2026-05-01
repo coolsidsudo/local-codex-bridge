@@ -57,7 +57,7 @@ The tool surface is intentionally conservative:
 - `get_task` — read task metadata and stdout/stderr tails.
 - `list_tasks` — list recent bridge task records.
 - `abort_task` — terminate a running local Codex process.
-- `get_git_diff` — inspect git status, diff stat, and diff.
+- `get_git_diff` — inspect git status, unstaged/staged diffs, and bounded untracked file previews.
 - `run_verification` — run an allowlisted verification command.
 - `git_commit_and_push` — after human approval, stage approved files, create one commit, and push it to the current branch on `origin`.
 
@@ -75,7 +75,7 @@ ChatGPT plans/reviews
   -> Local Codex Bridge performs controlled git add/commit/push
 ```
 
-`git_commit_and_push` should only be called after the human has reviewed the exact diff and verification evidence. Its safeguards include:
+`git_commit_and_push` should only be called after the human has reviewed the exact diff and verification evidence from `get_git_diff` and `run_verification`. `get_git_diff` distinguishes unstaged and staged changes and includes bounded text previews for untracked files when safe. Its safeguards include:
 
 - Only configured project roots are accessible.
 - No arbitrary shell execution is exposed.
@@ -445,7 +445,7 @@ Before starting real implementation work:
 7. Run git_status verification.
 8. Confirm branch, HEAD, remote, and clean worktree.
 9. Start a bounded local Codex task.
-10. Review stdout/stderr, git diff, and verification output.
+10. Review stdout/stderr, staged and unstaged git diffs, bounded untracked previews, and verification output.
 11. If changes are not acceptable, ask Codex to revise or stop.
 12. If changes are acceptable, explicitly approve the exact files and commit message.
 13. Call git_commit_and_push only after human approval.
@@ -490,7 +490,7 @@ Recommended defaults:
 - Do not expose it publicly without LCB auth configured; tunnels are transport only and are not the security boundary.
 - Configure only repos you are willing to let ChatGPT/Codex work on.
 - Keep verification commands allowlisted.
-- Review diffs and verification output before accepting changes.
+- Review staged/unstaged diffs, bounded untracked previews, and verification output before accepting changes.
 - Use `git_commit_and_push` only for reviewed and approved files.
 - Do not pass secrets in prompts.
 - Do not publish temporary tunnel URLs, auth env vars, or bearer tokens in public issues or docs.
