@@ -1,8 +1,28 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "local-codex-bridge"
 version = "0.1.0"
 description = "A local MCP bridge that lets ChatGPT start and inspect local Codex CLI tasks across multiple projects."
+readme = "README.md"
 requires-python = ">=3.11"
+license = {file = "LICENSE"}
+authors = [
+  {name = "coolsidsudo"}
+]
+keywords = ["codex", "mcp", "chatgpt", "local-development", "developer-tools"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Topic :: Software Development",
+  "Topic :: Software Development :: Version Control :: Git",
+]
 dependencies = [
   "fastmcp>=3.2.4",
   "pydantic>=2.7.0",
@@ -10,11 +30,20 @@ dependencies = [
   "rich>=13.7.0"
 ]
 
+[project.urls]
+Homepage = "https://github.com/coolsidsudo/local-codex-bridge"
+Repository = "https://github.com/coolsidsudo/local-codex-bridge"
+Issues = "https://github.com/coolsidsudo/local-codex-bridge/issues"
+Changelog = "https://github.com/coolsidsudo/local-codex-bridge/blob/main/CHANGELOG.md"
+
 [project.scripts]
 local-codex-bridge = "local_codex_bridge.cli:app"
 
-[tool.ruff]
-line-length = 100
-
 [project.optional-dependencies]
 test = ["pytest>=8.0.0"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100

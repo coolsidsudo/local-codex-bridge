@@ -1,0 +1,34 @@
+# Changelog
+
+## [0.1.0] - Unreleased
+
+Initial release-readiness baseline for the first tagged Local Codex Bridge release.
+Replace `Unreleased` with the actual release date before tagging.
+
+### Added
+
+- Local MCP bridge with project profiles for configured local repositories.
+- Bounded local Codex task start/inspect flow.
+- Allowlisted verification commands per project profile.
+- Controlled `git_commit_and_push` acceptance operation for human-approved files.
+- `static_bearer` auth mode for local/internal/test clients.
+- OIDC proxy auth mode for public ChatGPT-compatible connector use.
+- `doctor` diagnostics for setup/auth checks without starting MCP or printing secrets.
+- Cloudflare Tunnel operational guide.
+
+### Security
+
+- Fail-closed auth configuration for public-style no-auth deployments.
+- Loopback-only no-auth defaults for `auto` and `disabled` auth modes.
+- Environment-variable indirection for bearer tokens and OIDC client credentials.
+- Project-profile roots remain the filesystem trust boundary.
+- Verification commands remain allowlisted and run without arbitrary shell execution.
+- Controlled git acceptance checks approved files, branch state, staged files, and remote constraints before commit/push.
+
+### Known limitations
+
+- No init wizard yet.
+- No native OAuth server.
+- No npm wrapper.
+- No PyPI publication yet.
+- No PR/merge tools yet.

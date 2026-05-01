@@ -112,6 +112,26 @@ The recommended public ChatGPT-compatible mode is `auth.mode = "oidc_proxy"`, us
 
 ## 1. Install Local Codex Bridge
 
+For a pinned release install, use the GitHub tag. This is the recommended user install path for the first tagged release.
+
+With `pipx`:
+
+```bash
+pipx install "git+https://github.com/coolsidsudo/local-codex-bridge.git@v0.1.0"
+local-codex-bridge --help
+```
+
+With `uv`:
+
+```bash
+uv tool install "git+https://github.com/coolsidsudo/local-codex-bridge.git@v0.1.0"
+local-codex-bridge --help
+```
+
+Tag installs do not automatically create `~/.local-codex-bridge/config.toml`. Copy `config.example.toml` from the repository checkout or GitHub source archive, then edit it for your local project profiles and auth settings.
+
+For contributor/development work, use a clone and editable install:
+
 ```bash
 git clone https://github.com/coolsidsudo/local-codex-bridge.git
 cd local-codex-bridge
