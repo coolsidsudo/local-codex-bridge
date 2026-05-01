@@ -17,6 +17,8 @@ from local_codex_bridge.server import build_mcp
 
 SECRET_TOKEN = "super-secret-test-token"
 WHITESPACE_TOKEN = "   	  "
+OIDC_CLIENT_ID = "oidc-client-id-secret-value"
+OIDC_CLIENT_SECRET = "oidc-client-secret-value"
 
 
 @pytest.fixture
@@ -59,6 +61,33 @@ path = "{project_dir}"
         encoding="utf-8",
     )
     return cfg_file
+
+
+
+
+def oidc_auth_block(
+    *,
+    provider_config_url: str | None = "https://idp.example.test/.well-known/openid-configuration",
+    client_id_env: str = "LCB_OIDC_CLIENT_ID",
+    client_secret_env: str = "LCB_OIDC_CLIENT_SECRET",
+) -> str:
+    provider_line = (
+        f'provider_config_url = "{provider_config_url}"\n'
+        if provider_config_url is not None
+        else ""
+    )
+    return (
+        '[auth]\n'
+        'mode = "oidc_proxy"\n'
+        f'{provider_line}'
+        f'client_id_env = "{client_id_env}"\n'
+        f'client_secret_env = "{client_secret_env}"\n'
+    )
+
+
+def set_oidc_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LCB_OIDC_CLIENT_ID", OIDC_CLIENT_ID)
+    monkeypatch.setenv("LCB_OIDC_CLIENT_SECRET", OIDC_CLIENT_SECRET)
 
 
 def test_default_loopback_config_has_no_auth_provider(tmp_path: Path) -> None:
@@ -157,6 +186,235 @@ def test_token_literal_in_toml_fails_without_leaking_value(tmp_path: Path) -> No
     message = str(exc_info.value)
     assert "token_env" in message
     assert SECRET_TOKEN not in message
+
+
+
+def test_public_base_url_trailing_slash_is_normalized_for_oidc(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    set_oidc_env(monkeypatch)
+
+    cfg = BridgeConfig.load(
+        write_config(
+            tmp_path,
+            public_base_url="https://lcb.example.test/",
+            auth_block=oidc_auth_block(),
+        )
+    )
+
+    assert cfg.server.public_base_url == "https://lcb.example.test"
+
+
+@pytest.mark.parametrize(
+    ("public_base_url", "expected"),
+    [
+        ("http://lcb.example.test", "https://"),
+        ("https://lcb.example.test/mcp", "/mcp"),
+        ("https://lcb.example.test/nested", "non-root path"),
+        ("https://lcb.example.test?x=1", "query string"),
+        ("https://lcb.example.test#frag", "fragment"),
+        ("https://user:pass@lcb.example.test", "username or password"),
+    ],
+)
+def test_oidc_public_base_url_validation_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    public_base_url: str,
+    expected: str,
+) -> None:
+    set_oidc_env(monkeypatch)
+
+    with pytest.raises(ValueError) as exc_info:
+        BridgeConfig.load(
+            write_config(
+                tmp_path,
+                public_base_url=public_base_url,
+                auth_block=oidc_auth_block(),
+            )
+        )
+
+    assert expected in str(exc_info.value)
+    assert OIDC_CLIENT_ID not in str(exc_info.value)
+    assert OIDC_CLIENT_SECRET not in str(exc_info.value)
+    assert "user:pass" not in str(exc_info.value)
+
+
+def test_oidc_without_public_base_url_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    set_oidc_env(monkeypatch)
+
+    with pytest.raises(ValueError) as exc_info:
+        BridgeConfig.load(write_config(tmp_path, auth_block=oidc_auth_block()))
+
+    assert "public_base_url" in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    ("provider_config_url", "expected"),
+    [
+        (None, "provider_config_url"),
+        ("", "provider_config_url"),
+        ("http://idp.example.test/.well-known/openid-configuration", "https://"),
+        (
+            "https://user:pass@idp.example.test/.well-known/openid-configuration",
+            "username or password",
+        ),
+    ],
+)
+def test_oidc_provider_config_url_validation_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    provider_config_url: str | None,
+    expected: str,
+) -> None:
+    set_oidc_env(monkeypatch)
+
+    with pytest.raises(ValueError) as exc_info:
+        BridgeConfig.load(
+            write_config(
+                tmp_path,
+                public_base_url="https://lcb.example.test",
+                auth_block=oidc_auth_block(provider_config_url=provider_config_url),
+            )
+        )
+
+    assert expected in str(exc_info.value)
+    assert OIDC_CLIENT_ID not in str(exc_info.value)
+    assert OIDC_CLIENT_SECRET not in str(exc_info.value)
+    assert "user:pass" not in str(exc_info.value)
+
+
+def test_oidc_without_client_id_env_var_fails_without_leaking_value(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("LCB_OIDC_CLIENT_ID", raising=False)
+    monkeypatch.setenv("LCB_OIDC_CLIENT_SECRET", OIDC_CLIENT_SECRET)
+
+    with pytest.raises(ValueError) as exc_info:
+        BridgeConfig.load(
+            write_config(
+                tmp_path,
+                public_base_url="https://lcb.example.test",
+                auth_block=oidc_auth_block(),
+            )
+        )
+
+    message = str(exc_info.value)
+    assert "LCB_OIDC_CLIENT_ID" in message
+    assert OIDC_CLIENT_SECRET not in message
+
+
+def test_oidc_whitespace_client_secret_env_var_fails_without_leaking_value(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LCB_OIDC_CLIENT_ID", OIDC_CLIENT_ID)
+    monkeypatch.setenv("LCB_OIDC_CLIENT_SECRET", WHITESPACE_TOKEN)
+
+    with pytest.raises(ValueError) as exc_info:
+        BridgeConfig.load(
+            write_config(
+                tmp_path,
+                public_base_url="https://lcb.example.test",
+                auth_block=oidc_auth_block(),
+            )
+        )
+
+    message = str(exc_info.value)
+    assert "LCB_OIDC_CLIENT_SECRET" in message
+    assert OIDC_CLIENT_ID not in message
+    assert WHITESPACE_TOKEN not in message
+
+
+@pytest.mark.parametrize("literal_key", ["client_id", "client_secret", "oidc_client_secret", "oauth_client_secret"])
+def test_oidc_credential_literal_in_toml_fails_without_leaking_value(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    literal_key: str,
+) -> None:
+    set_oidc_env(monkeypatch)
+    literal_value = "literal-credential-secret-value"
+    auth_block = oidc_auth_block() + f'{literal_key} = "{literal_value}"\n'
+
+    with pytest.raises(ValueError) as exc_info:
+        BridgeConfig.load(
+            write_config(
+                tmp_path,
+                public_base_url="https://lcb.example.test",
+                auth_block=auth_block,
+            )
+        )
+
+    message = str(exc_info.value)
+    assert literal_key in message
+    assert literal_value not in message
+
+
+def test_oidc_provider_construction_uses_minimal_fastmcp_args(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LCB_OIDC_CLIENT_ID", f"  {OIDC_CLIENT_ID}  ")
+    monkeypatch.setenv("LCB_OIDC_CLIENT_SECRET", f"\t{OIDC_CLIENT_SECRET}\n")
+    captured: dict[str, object] = {}
+
+    class DummyOIDCProxy:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+    monkeypatch.setattr("local_codex_bridge.auth.OIDCProxy", DummyOIDCProxy)
+    cfg = BridgeConfig.load(
+        write_config(
+            tmp_path,
+            public_base_url="https://lcb.example.test/",
+            auth_block=oidc_auth_block(),
+        )
+    )
+
+    provider = build_auth_provider(cfg)
+
+    assert isinstance(provider, DummyOIDCProxy)
+    assert captured == {
+        "config_url": "https://idp.example.test/.well-known/openid-configuration",
+        "client_id": OIDC_CLIENT_ID,
+        "client_secret": OIDC_CLIENT_SECRET,
+        "base_url": "https://lcb.example.test",
+    }
+    assert "redirect_path" not in captured
+    assert "required_scopes" not in captured
+    assert "upstream_authorization_endpoint" not in captured
+    assert "upstream_token_endpoint" not in captured
+
+
+def test_oidc_startup_output_does_not_include_env_credentials(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    set_oidc_env(monkeypatch)
+    cfg_file = write_config(
+        tmp_path,
+        public_base_url="https://lcb.example.test/",
+        auth_block=oidc_auth_block(),
+    )
+
+    class DummyMCP:
+        def run(self, **_: object) -> None:
+            return None
+
+    monkeypatch.setattr("local_codex_bridge.cli.build_mcp", lambda cfg: DummyMCP())
+    result = CliRunner().invoke(app, ["serve", "--config", str(cfg_file)])
+
+    assert result.exit_code == 0
+    assert "Auth mode:" in result.output
+    assert "oidc_proxy" in result.output
+    assert "https://lcb.example.test" in result.output
+    assert OIDC_CLIENT_ID not in result.output
+    assert OIDC_CLIENT_SECRET not in result.output
+
 
 def test_static_bearer_without_env_var_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("LCB_AUTH_TOKEN", raising=False)

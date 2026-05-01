@@ -11,13 +11,20 @@ http://127.0.0.1:8765/mcp
 ## Security expectations
 
 - Cloudflare Tunnel is transport only; it is not the Local Codex Bridge security boundary.
-- Keep the current Cloudflare hostname disabled / unused for real work until LCB auth is configured.
-- Do **not** connect ChatGPT to a public tunnel until LCB auth is configured.
+- For public ChatGPT work, configure LCB `auth.mode = "oidc_proxy"`; LCB auth is the security boundary.
 - Do **not** expose Local Codex Bridge unauthenticated on the public internet.
-- Slice 1 `static_bearer` auth is for local/internal/test clients and does not complete the public ChatGPT-compatible auth story.
-- Public deployment should use the planned OAuth/OIDC proxy mode in a later slice.
+- `static_bearer` auth is for local/internal/test clients only and is not the recommended public ChatGPT-compatible mode.
 - Do **not** commit tunnel URLs, Cloudflare credentials, service tokens, certs, tokens, or tunnel credential JSON files.
 - Treat the tunnel hostname as operational configuration for a specific environment, not as project source code.
+
+## What auth values go where
+
+For `auth.mode = "oidc_proxy"`:
+
+- `server.public_base_url`: your real HTTPS Cloudflare/ngrok/other tunnel domain, without `/mcp`.
+- ChatGPT connector URL: `{public_base_url}/mcp`.
+- IdP redirect URI: `{public_base_url}/auth/callback`.
+- Env vars: OIDC client ID and client secret.
 
 ## Setup outline
 
@@ -63,11 +70,13 @@ This outline uses a locally managed named tunnel. Adjust commands for your opera
    cloudflared tunnel --config /Users/<you>/.cloudflared/config.yml run TUNNEL_UUID
    ```
 
-8. After LCB OAuth/OIDC proxy auth is implemented and configured in a later slice, use the resulting HTTPS URL plus `/mcp` as the ChatGPT custom MCP connector URL. Do not use this public endpoint for real ChatGPT work before then.
+8. Configure LCB `auth.mode = "oidc_proxy"`, then use the resulting HTTPS URL plus `/mcp` as the ChatGPT custom MCP connector URL. Use the HTTPS hostname without `/mcp` as `server.public_base_url`, and register `{public_base_url}/auth/callback` as the IdP redirect URI.
 
    ```text
    https://local-codex-bridge.example.com/mcp
    ```
+
+   `example.com` and `YOUR-...` values are placeholders and do not exist; replace them with real values.
 
 9. Test remote reachability.
 
@@ -126,7 +135,7 @@ Using only the hostname may reach Cloudflare but not the MCP endpoint.
 
 ### Cloudflare Access blocks the connector
 
-Cloudflare Access / Zero Trust protection can be useful, but it is not a replacement for LCB auth. The connector must be able to satisfy the configured auth policy. Do not disable LCB authentication for public exposure. Static bearer is not the planned public ChatGPT-compatible mode; use the later OAuth/OIDC proxy mode for public connector use.
+Cloudflare Access / Zero Trust protection can be useful, but it is not a replacement for LCB auth. The connector must be able to satisfy the configured auth policy. Do not disable LCB authentication for public exposure. Static bearer is not the recommended public ChatGPT-compatible mode; use `auth.mode = "oidc_proxy"` for public connector use.
 
 ### ChatGPT developer MCP `FORBIDDEN`
 

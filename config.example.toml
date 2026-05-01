@@ -2,9 +2,10 @@
 host = "127.0.0.1"
 port = 8765
 
-# Optional public HTTPS origin for future authenticated deployments.
-# Leave empty/unset for local loopback development.
-# public_base_url = "https://local-codex-bridge.example.com"
+# Optional public HTTPS origin for authenticated deployments.
+# Leave empty/unset for local loopback development. For oidc_proxy, set this
+# to your real HTTPS tunnel/domain only, without /mcp, query, or fragment.
+# public_base_url = "https://YOUR-REAL-TUNNEL-OR-DOMAIN"
 
 # Where bridge task logs are stored.
 task_dir = "~/.local-codex-bridge/tasks"
@@ -24,9 +25,24 @@ default_codex_args = ["--json"]
 [auth]
 mode = "auto"
 
-# Static bearer is for local/internal/test clients only; it is not the planned
-# public ChatGPT-compatible auth mode. Set the token value in the environment,
-# never in this TOML file.
+# Recommended public ChatGPT-compatible mode. Values containing example.com or
+# YOUR-... are placeholders and do not exist. Replace them with your real HTTPS
+# tunnel/domain and OIDC provider values.
+#
+# mode = "oidc_proxy"
+# provider_config_url = "https://YOUR-IDP/.well-known/openid-configuration"
+# client_id_env = "LCB_OIDC_CLIENT_ID"
+# client_secret_env = "LCB_OIDC_CLIENT_SECRET"
+#
+# What values go where:
+# - server.public_base_url: real HTTPS tunnel/domain, without /mcp
+# - ChatGPT connector URL: {public_base_url}/mcp
+# - IdP redirect URI: {public_base_url}/auth/callback
+# - env vars: OIDC client ID and client secret
+#
+# Static bearer is for local/internal/test clients only. It is not the
+# recommended public ChatGPT-compatible auth mode. Set the token value in the
+# environment, never in this TOML file.
 #
 # mode = "static_bearer"
 # token_env = "LCB_AUTH_TOKEN"

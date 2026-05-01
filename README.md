@@ -103,11 +103,11 @@ Tunnels are external deployment layers. They are not Python runtime dependencies
 
 ## Authentication status
 
-Local Codex Bridge now has first-class auth configuration and fails closed for public-style no-auth deployments. The default `auth.mode = "auto"` permits no-auth only for loopback local development with no `server.public_base_url`. Explicit `auth.mode = "disabled"` is also loopback-only.
+Local Codex Bridge has first-class auth configuration and fails closed for public-style no-auth deployments. The default `auth.mode = "auto"` permits no-auth only for loopback local development with no `server.public_base_url`. Explicit `auth.mode = "disabled"` is also loopback-only.
 
-Slice 1 also supports `auth.mode = "static_bearer"` via a token stored in an environment variable such as `LCB_AUTH_TOKEN`. This is for local/internal/test clients that can send `Authorization: Bearer ...`; it is not the recommended public ChatGPT custom MCP path. Do not use query-string tokens.
+The recommended public ChatGPT-compatible mode is `auth.mode = "oidc_proxy"`, using FastMCP built-in OIDC proxy auth. Set `server.public_base_url` to your real public HTTPS tunnel/domain without `/mcp`, then use `{public_base_url}/mcp` as the ChatGPT connector URL and `{public_base_url}/auth/callback` as the IdP redirect URI. OIDC client ID and client secret must come from environment variables. `example.com` and `YOUR-...` values in docs are placeholders and do not exist.
 
-The planned public ChatGPT-compatible mode is OAuth/OIDC proxy auth using FastMCP built-in auth in a later slice. Do not connect ChatGPT to a public tunnel until LCB auth is configured for that deployment. Cloudflare Tunnel and ngrok are transport only; LCB must enforce auth. See [docs/AUTH.md](docs/AUTH.md).
+`auth.mode = "static_bearer"` is also available via a token stored in an environment variable such as `LCB_AUTH_TOKEN`. This is for local/internal/test clients that can send `Authorization: Bearer ...`; it is not the recommended public ChatGPT custom MCP path. Do not use query-string tokens. Cloudflare Tunnel and ngrok are transport only; LCB auth is the security boundary. See [docs/AUTH.md](docs/AUTH.md).
 
 
 ## 1. Install Local Codex Bridge
@@ -288,7 +288,7 @@ https://example-name.ngrok-free.dev/mcp
 
 Do **not** commit this URL to a repo. Free ngrok URLs are often temporary and should be treated as session-local operational details.
 
-If you use Cloudflare Tunnel or another provider, treat it as transport only: point it at the same local bridge endpoint, normally `http://127.0.0.1:8765`. Do not use the public URL for real ChatGPT work until LCB auth is configured. For a stable Cloudflare Tunnel setup, see [docs/CLOUDFLARE_TUNNEL.md](docs/CLOUDFLARE_TUNNEL.md).
+If you use Cloudflare Tunnel or another provider, treat it as transport only: point it at the same local bridge endpoint, normally `http://127.0.0.1:8765`. For public ChatGPT work, configure LCB `auth.mode = "oidc_proxy"`; LCB auth is the security boundary. For a stable Cloudflare Tunnel setup, see [docs/CLOUDFLARE_TUNNEL.md](docs/CLOUDFLARE_TUNNEL.md).
 
 ## 8. Test the tunnel endpoint
 
@@ -308,7 +308,18 @@ HTTP/2 400
 
 That means the HTTPS tunnel reaches the MCP server. A real MCP client will manage session setup; curl does not.
 
-## 9. Add the bridge as a ChatGPT custom MCP connector
+## 9. What auth values go where
+
+For `auth.mode = "oidc_proxy"`:
+
+- `server.public_base_url`: your real HTTPS tunnel/domain, without `/mcp`.
+- ChatGPT connector URL: `{public_base_url}/mcp`.
+- IdP redirect URI: `{public_base_url}/auth/callback`.
+- Env vars: OIDC client ID and client secret.
+
+`example.com` domains and `YOUR-...` values are placeholders. They do not exist; replace them with your real values.
+
+## 10. Add the bridge as a ChatGPT custom MCP connector
 
 In ChatGPT web:
 
@@ -325,7 +336,7 @@ In ChatGPT web:
 https://example-name.ngrok-free.dev/mcp
 ```
 
-9. Do not use a public tunnel for real work until LCB auth is configured. Static bearer is local/internal/test only; public ChatGPT-compatible deployment should use the planned OAuth/OIDC proxy mode.
+9. For public ChatGPT-compatible deployment, use `auth.mode = "oidc_proxy"`. Static bearer is local/internal/test only.
 10. Save/connect the connector.
 
 After connecting, ChatGPT settings should show the bridge actions, including:
@@ -344,7 +355,7 @@ git_commit_and_push
 
 ChatGPT-side developer MCP errors such as `FORBIDDEN: This conversation does not support developer MCPs` are platform/conversation gating. Local Codex Bridge cannot guarantee that bridge-code changes will enable developer MCPs for a gated ChatGPT conversation.
 
-## 10. Select the connector in a chat
+## 11. Select the connector in a chat
 
 In a new or refreshed ChatGPT chat:
 
@@ -360,7 +371,7 @@ Use Local Codex Bridge and list configured projects.
 
 A healthy response should show your configured project profiles.
 
-## 11. Smoke test a project without editing files
+## 12. Smoke test a project without editing files
 
 Ask ChatGPT to run this sequence through the bridge:
 
@@ -381,7 +392,7 @@ Smoke test only. Do not edit files.
 7. Call get_git_diff and confirm no files changed.
 ```
 
-## 12. Normal operating checklist
+## 13. Normal operating checklist
 
 Before starting real implementation work:
 
@@ -402,7 +413,7 @@ Before starting real implementation work:
 14. Confirm the returned branch, remote, commit, push output, and final status.
 ```
 
-## 13. Common issues
+## 14. Common issues
 
 ### `curl /mcp` returns 406 or 400
 
@@ -430,7 +441,7 @@ Stop and inspect before starting Codex. The bridge intentionally makes dirty sta
 
 Read the structured diagnostics. Common causes include an empty file list, blank commit message, a non-`origin` remote, a branch mismatch, path escaping the project root, unapproved pre-staged files, or staged files that do not exactly match the approved file list. Inspect git state before retrying, especially if a failed operation may have left approved changes staged.
 
-## 14. Security notes
+## 15. Security notes
 
 This bridge can cause local Codex to modify files in configured repositories and can perform a controlled acceptance commit/push after explicit human approval. Treat it as powerful local automation.
 

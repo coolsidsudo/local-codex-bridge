@@ -7,9 +7,9 @@ Local Codex Bridge is project-agnostic: configured project roots are trust bound
 ## Strong recommendations
 
 - Bind to `127.0.0.1` for local development.
-- Do not connect ChatGPT to a public tunnel until LCB auth is configured.
+- For public ChatGPT use, configure `auth.mode = "oidc_proxy"`.
 - Treat Cloudflare Tunnel, ngrok, and reverse proxies as transport only; LCB itself must enforce auth.
-- Do not expose this server directly to the public internet without LCB auth.
+- Do not expose this server directly to the public internet without LCB auth; LCB auth is the security boundary.
 - Configure only the repositories you are willing to let ChatGPT/Codex work on.
 - Keep verification commands allowlisted.
 - Do not add arbitrary shell execution unless you fully understand the risk.
@@ -19,15 +19,18 @@ Local Codex Bridge is project-agnostic: configured project roots are trust bound
 - Do not publish temporary tunnel URLs in public issues or documentation.
 
 
-## Built-in auth slice 1
+## Built-in auth
 
-LCB auth configuration is now first-class:
+LCB auth configuration is first-class:
 
 - `auth.mode = "auto"` is the default and permits no-auth only for loopback hosts with no `server.public_base_url`.
 - `auth.mode = "disabled"` is explicit no-auth and is also loopback-only with no `server.public_base_url`.
-- `auth.mode = "static_bearer"` uses FastMCP's static bearer verifier with the token read from an environment variable such as `LCB_AUTH_TOKEN`. Token literal values in TOML are intentionally unsupported.
+- `auth.mode = "static_bearer"` uses FastMCP's static bearer verifier with the token read from an environment variable such as `LCB_AUTH_TOKEN`. It is for local/internal/test clients only, not recommended public ChatGPT use.
+- `auth.mode = "oidc_proxy"` uses FastMCP's OIDC proxy and is the recommended public ChatGPT-compatible mode.
 
-Public-style no-auth configurations fail closed at startup. Static bearer is for local/internal/test clients and does not complete the public ChatGPT-compatible auth story. Public ChatGPT-compatible deployment should use the planned OAuth/OIDC proxy mode in a later slice. Query-string tokens are not supported.
+For `oidc_proxy`, `server.public_base_url` must be the real HTTPS tunnel/domain without `/mcp`; ChatGPT uses `{public_base_url}/mcp`, and the IdP redirect URI is `{public_base_url}/auth/callback`. OIDC client ID and client secret must come from environment variables. `example.com` and `YOUR-...` values in docs are placeholders and do not exist.
+
+Public-style no-auth configurations fail closed at startup. Query-string tokens are not supported.
 
 ## Controlled `git_commit_and_push`
 
@@ -72,7 +75,6 @@ ChatGPT-side developer MCP errors such as `FORBIDDEN: This conversation does not
 
 ## Current v0 limitations
 
-- No OAuth/OIDC proxy yet; this is planned for public ChatGPT-compatible deployment.
 - No built-in Cloudflare Access validation.
 - No arbitrary shell tool.
 - No streaming live logs; polling is supported.

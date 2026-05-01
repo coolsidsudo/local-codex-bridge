@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -16,6 +17,8 @@ LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 
 class ProjectConfig(BaseModel):
+    model_config = ConfigDict(hide_input_in_errors=True)
+
     name: str
     path: Path
     default_model: str | None = None
@@ -28,6 +31,8 @@ class ProjectConfig(BaseModel):
 
 
 class ServerConfig(BaseModel):
+    model_config = ConfigDict(hide_input_in_errors=True)
+
     host: str = "127.0.0.1"
     port: int = 8765
     public_base_url: str | None = None
@@ -38,12 +43,31 @@ class ServerConfig(BaseModel):
 
     @field_validator("public_base_url", mode="before")
     @classmethod
-    def empty_public_base_url_is_none(cls, value: Any) -> str | None:
+    def normalize_public_base_url(cls, value: Any) -> str | None:
         if value is None:
             return None
-        if isinstance(value, str) and not value.strip():
+
+        url = str(value).strip()
+        if not url:
             return None
-        return str(value).strip()
+        if not url.startswith("https://"):
+            raise ValueError("server.public_base_url must start with https://")
+
+        parsed = urlparse(url)
+        if parsed.scheme != "https" or not parsed.netloc or not parsed.hostname:
+            raise ValueError("server.public_base_url must be a public HTTPS origin/base URL")
+        if parsed.username is not None or parsed.password is not None:
+            raise ValueError("server.public_base_url must not include username or password")
+        if "/mcp" in parsed.path:
+            raise ValueError("server.public_base_url must not include /mcp")
+        if parsed.path not in {"", "/"}:
+            raise ValueError("server.public_base_url must not include a non-root path")
+        if parsed.query:
+            raise ValueError("server.public_base_url must not include a query string")
+        if parsed.fragment:
+            raise ValueError("server.public_base_url must not include a fragment")
+
+        return f"https://{parsed.netloc}"
 
     @field_validator("task_dir")
     @classmethod
@@ -56,21 +80,41 @@ class ServerConfig(BaseModel):
 
 
 class AuthConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
-    mode: Literal["auto", "disabled", "static_bearer"] = "auto"
+    mode: Literal["auto", "disabled", "static_bearer", "oidc_proxy"] = "auto"
     token_env: str = "LCB_AUTH_TOKEN"
     client_id: str = "local-codex-bridge-static"
     required_scopes: list[str] = Field(default_factory=lambda: ["lcb:read"])
     token_scopes: list[str] = Field(default_factory=lambda: ["lcb:read", "lcb:write"])
+    provider_config_url: str | None = None
+    client_id_env: str = "LCB_OIDC_CLIENT_ID"
+    client_secret_env: str = "LCB_OIDC_CLIENT_SECRET"
 
-    @field_validator("token_env", "client_id")
+    @field_validator("token_env", "client_id", "client_id_env", "client_secret_env")
     @classmethod
     def non_empty_string(cls, value: str) -> str:
         value = value.strip()
         if not value:
             raise ValueError("must not be empty")
         return value
+
+    @field_validator("provider_config_url", mode="before")
+    @classmethod
+    def normalize_provider_config_url(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        url = str(value).strip()
+        if not url:
+            return None
+        if not url.startswith("https://"):
+            raise ValueError("provider_config_url must start with https://")
+        parsed = urlparse(url)
+        if parsed.scheme != "https" or not parsed.netloc or not parsed.hostname:
+            raise ValueError("provider_config_url must be an HTTPS URL")
+        if parsed.username is not None or parsed.password is not None:
+            raise ValueError("provider_config_url must not include username or password")
+        return url
 
     @field_validator("required_scopes", "token_scopes")
     @classmethod
@@ -84,6 +128,8 @@ class AuthConfig(BaseModel):
 
 
 class BridgeConfig(BaseModel):
+    model_config = ConfigDict(hide_input_in_errors=True)
+
     server: ServerConfig
     projects: dict[str, ProjectConfig]
     auth: AuthConfig = Field(default_factory=AuthConfig)
@@ -112,6 +158,28 @@ class BridgeConfig(BaseModel):
                 f"{self.auth.token_env}"
             )
 
+        if mode == "oidc_proxy":
+            if not public_base_url:
+                raise ValueError(
+                    "auth.mode='oidc_proxy' requires server.public_base_url "
+                    "set to the public HTTPS origin/base URL"
+                )
+            if not self.auth.provider_config_url:
+                raise ValueError(
+                    "auth.mode='oidc_proxy' requires provider_config_url "
+                    "set to an HTTPS OpenID configuration URL"
+                )
+            if not os.environ.get(self.auth.client_id_env, "").strip():
+                raise ValueError(
+                    "auth.mode='oidc_proxy' requires non-empty env var "
+                    f"{self.auth.client_id_env}"
+                )
+            if not os.environ.get(self.auth.client_secret_env, "").strip():
+                raise ValueError(
+                    "auth.mode='oidc_proxy' requires non-empty env var "
+                    f"{self.auth.client_secret_env}"
+                )
+
         return self
 
     @classmethod
@@ -120,12 +188,19 @@ class BridgeConfig(BaseModel):
         if not isinstance(auth, dict):
             return
         literal_keys = {"token", "token_value", "bearer_token", "static_token"}
+        if auth.get("mode") == "oidc_proxy":
+            literal_keys.update(
+                {"client_id", "client_secret", "oidc_client_secret", "oauth_client_secret"}
+            )
+        else:
+            literal_keys.update({"client_secret", "oidc_client_secret", "oauth_client_secret"})
+
         configured = literal_keys.intersection(auth)
         if configured:
             keys = ", ".join(sorted(configured))
             raise ValueError(
-                "auth token literal fields are not supported in TOML; "
-                f"remove {keys} and use token_env instead"
+                "auth credential literal fields are not supported in TOML; "
+                f"remove {keys} and use token_env or env-var indirection instead"
             )
 
     @classmethod

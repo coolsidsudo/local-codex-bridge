@@ -1,10 +1,48 @@
 # Authentication
 
-Local Codex Bridge can start local Codex tasks and inspect configured repositories, so authentication is required before any public or persistent endpoint is used. A tunnel is only transport; it is not the security boundary.
-
-## Slice 1 auth modes
+Local Codex Bridge can start local Codex tasks and inspect configured repositories, so authentication is required before any public or persistent endpoint is used. A tunnel is only transport; it is not the security boundary. LCB auth is the security boundary.
 
 Auth is configured in `config.toml` under `[auth]`.
+
+## Recommended public mode: `oidc_proxy`
+
+For public ChatGPT custom MCP use, use FastMCP's built-in OIDC proxy mode:
+
+```toml
+[server]
+public_base_url = "https://YOUR-REAL-TUNNEL-OR-DOMAIN"
+
+[auth]
+mode = "oidc_proxy"
+provider_config_url = "https://YOUR-IDP/.well-known/openid-configuration"
+client_id_env = "LCB_OIDC_CLIENT_ID"
+client_secret_env = "LCB_OIDC_CLIENT_SECRET"
+```
+
+Set the OIDC client credentials in the environment before starting the server:
+
+```bash
+export LCB_OIDC_CLIENT_ID="your-client-id"
+export LCB_OIDC_CLIENT_SECRET="your-client-secret"
+local-codex-bridge serve --config ~/.local-codex-bridge/config.toml
+```
+
+Do not put OIDC client IDs or client secrets directly in TOML. LCB intentionally uses env-var indirection for credentials and will not print env-derived values in startup output or validation errors.
+
+### What values go where
+
+- `server.public_base_url`: your real HTTPS tunnel/domain, without `/mcp`.
+- ChatGPT connector URL: `{public_base_url}/mcp`.
+- IdP redirect URI: `{public_base_url}/auth/callback`.
+- Env vars: OIDC client ID and OIDC client secret.
+
+`example.com` domains and `YOUR-...` values in this repository are placeholders. They do not exist; replace them with your real tunnel/domain and identity provider values.
+
+`server.public_base_url` is a public HTTPS origin/base only. It must start with `https://`, must not include `/mcp`, must not include a non-root path, query string, or fragment, and is normalized by removing a trailing `/`.
+
+FastMCP's OIDC proxy publishes the OAuth/OIDC support endpoints and uses `/auth/callback` by default. Local Codex Bridge does not implement a native OAuth server.
+
+## Local development modes
 
 ### `auto` default
 
@@ -44,7 +82,7 @@ local-codex-bridge serve --config ~/.local-codex-bridge/config.toml
 
 Do not put token literal values in TOML. LCB intentionally supports only env-var indirection for this mode and will not print token values in startup output or validation errors. Unknown `[auth]` fields, empty scope lists, and blank scope strings are rejected.
 
-`static_bearer` is for local, internal, and automated test clients that can send a standard `Authorization: Bearer ...` header. It is not the recommended public ChatGPT custom MCP path and does not complete the public ChatGPT-compatible auth story.
+`static_bearer` is for local, internal, and automated test clients that can send a standard `Authorization: Bearer ...` header. It is not the recommended public ChatGPT custom MCP path.
 
 ## Public and tunnel deployments
 
@@ -52,6 +90,4 @@ Do not connect ChatGPT to a public tunnel until LCB auth is configured. Cloudfla
 
 Query-string tokens are rejected as a design direction. They are easy to leak through logs, browser history, and shared URLs, and they are not the MCP-compatible public target.
 
-## Planned public ChatGPT-compatible mode
-
-A later slice should add OAuth/OIDC proxy support using FastMCP built-in auth. That is the intended public deployment mode for ChatGPT custom MCP connectors. Local Codex Bridge should remain general-purpose and project-agnostic; downstream installations should be configuration only, not forked or project-specific bridge code.
+Public ChatGPT-compatible deployment should use `auth.mode = "oidc_proxy"` with a real OIDC provider. Local Codex Bridge remains general-purpose and project-agnostic; downstream installations should be configuration only, not forked or project-specific bridge code.
