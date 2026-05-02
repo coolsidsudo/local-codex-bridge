@@ -57,12 +57,14 @@ Safeguards:
 ```text
 ChatGPT plans/reviews
   -> local Codex CLI edits a configured repo
-  -> ChatGPT reviews package index, staged/unstaged diffs, bounded untracked previews, and verification output
+  -> ChatGPT reviews package index, targeted diffs, bounded untracked previews, and verification output
   -> human approves
   -> bridge performs controlled git add/commit/push
 ```
 
 `get_review_package` is read-only. It uses fixed git status/name-status/stat/numstat commands and existing safe untracked preview checks to report a changed-file index without full diffs or full file contents. It does not run verification commands, mutate branches, stage files, commit, push, create PRs, or touch tags/releases.
+
+`get_changed_file_diff` is read-only. It returns one bounded targeted diff for an exact changed/staged/untracked repo-relative path. It uses fixed git argv only, refuses clean/absent paths, outside-repo paths, directories, symlinks, binary or unsafe untracked files, and does not run verification commands or perform any Git/GitHub mutations.
 
 Safeguards:
 

@@ -77,6 +77,21 @@ def build_mcp(config: str | Path | BridgeConfig) -> FastMCP:
         return runner.get_review_package(project_id, max_chars=max_chars)
 
     @mcp.tool
+    def get_changed_file_diff(
+        project_id: str,
+        path: str,
+        source: str = "auto",
+        max_chars: int = 30000,
+    ) -> dict[str, Any]:
+        """Return one bounded targeted changed-file diff for review."""
+        return runner.get_changed_file_diff(
+            project_id=project_id,
+            path=path,
+            source=source,
+            max_chars=max_chars,
+        )
+
+    @mcp.tool
     def git_get_branch_status(project_id: str) -> dict[str, Any]:
         """Return current branch, dirty, upstream, ahead/behind, HEAD, and remote evidence."""
         return runner.git_get_branch_status(project_id)
