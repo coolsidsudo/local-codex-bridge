@@ -63,8 +63,12 @@ GitHub 或其他 VCS host
 - `git_create_work_branch` — 基于已有本地 base 分支创建并切换到新的本地工作分支。
 - `run_verification` — 运行项目配置中 allowlist 的验证命令。
 - `git_commit_and_push` — 在人工批准后，stage 已批准文件、创建一个 commit，并 push 到 `origin` 上的当前分支。
+- `github_create_pr` — 通过已安装的 `gh` CLI，为已经 push 的当前分支创建 GitHub pull request。
+- `github_get_pr_status` — 通过已安装的 `gh` CLI 读取 GitHub pull request 状态和证据。
 
 v0 不暴露任意 shell 执行。验证命令必须在每个项目 profile 中显式 allowlist。`git_create_work_branch` 和 `git_commit_and_push` 是 bridge 自有的 Git 操作，不是通用 shell 或通用文件系统工具。
+
+GitHub PR 工具把 `gh` 作为外部 substrate。Local Codex Bridge 不实现原生 GitHub API / token 处理，也不存储、打印或管理 GitHub token。
 
 ## 受控分支工作流
 
@@ -106,12 +110,29 @@ ChatGPT 规划 / 审查
 - 创建 commit 前，staged 文件必须与已批准文件列表完全一致。
 - 不安全输入或状态会返回结构化 `blocked_*` diagnostics，并在相关时包含有用的 git 证据。
 
+## 受控 GitHub PR 工作流
+
+`github_create_pr` 用于 push 之后的审查步骤。只有当已配置 repo 的 `origin` remote 位于 `github.com`、当前分支是普通本地分支、worktree 干净，并且当前分支已经在 `origin` 上且 SHA 与本地 `HEAD` 完全一致时，它才会创建 pull request。
+
+安全措施包括：
+
+- PR 操作只使用固定的 `git` 和 `gh` argv，并使用 `shell=False`；不提供任意 `gh` 透传。
+- `gh --version` 和 `gh auth status -h github.com` 必须成功。
+- 支持常见公开 GitHub HTTPS 和 SSH `github.com/OWNER/REPO` remote 形式。
+- 如果省略 `base_branch`，bridge 通过 `gh repo view` 读取仓库默认分支；不会硬编码 `main`。
+- 显式 `base_branch` 会经过保守校验，并且必须存在于 `origin`。
+- 如果当前分支是 GitHub 默认分支，或当前分支等于选定 base 分支，则拒绝创建 PR。
+- 未发布分支和 remote SHA 不匹配会被拒绝；C2 不增加 push-upstream 权限。
+- 如果当前分支已有 open PR，则返回已有 PR 证据，不创建重复 PR。
+- 新 PR 默认是 draft；允许创建非 draft PR，但 merge 和 auto-merge 仍不在范围内。
+
 ## 环境要求
 
 - macOS、Linux，或其他可以运行 Python 和 Codex CLI 的环境。
 - Python 3.11+。
 - 已安装并登录的本地 OpenAI Codex CLI。
 - 一个你希望 Codex 操作的本地 git 仓库。
+- GitHub PR 工具可选需要：已安装并对 `github.com` 完成认证的 GitHub CLI `gh`。
 - 如果要让 ChatGPT Web 连接本地服务，需要 ngrok 或 Cloudflare Tunnel 之类的 tunnel provider。
 - ChatGPT custom MCP connector 权限。
 

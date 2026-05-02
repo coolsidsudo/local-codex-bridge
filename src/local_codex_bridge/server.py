@@ -122,4 +122,32 @@ def build_mcp(config: str | Path | BridgeConfig) -> FastMCP:
             timeout=timeout,
         )
 
+    @mcp.tool
+    def github_create_pr(
+        project_id: str,
+        title: str,
+        body: str,
+        base_branch: str | None = None,
+        draft: bool = True,
+    ) -> dict[str, Any]:
+        """Create a GitHub pull request for the already-pushed current branch via gh CLI."""
+        return runner.github_create_pr(
+            project_id=project_id,
+            title=title,
+            body=body,
+            base_branch=base_branch,
+            draft=draft,
+        )
+
+    @mcp.tool
+    def github_get_pr_status(
+        project_id: str,
+        pr_url_or_number: str | int | None = None,
+    ) -> dict[str, Any]:
+        """Return GitHub pull request status/evidence via gh CLI."""
+        return runner.github_get_pr_status(
+            project_id=project_id,
+            pr_url_or_number=pr_url_or_number,
+        )
+
     return mcp

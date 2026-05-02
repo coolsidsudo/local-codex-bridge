@@ -112,3 +112,7 @@ Do not connect ChatGPT to a public tunnel until LCB auth is configured. Cloudfla
 Query-string tokens are rejected as a design direction. They are easy to leak through logs, browser history, and shared URLs, and they are not the MCP-compatible public target.
 
 Public ChatGPT-compatible deployment should use `auth.mode = "oidc_proxy"` with a real OIDC provider. Local Codex Bridge remains general-purpose and project-agnostic; downstream installations should be configuration only, not forked or project-specific bridge code.
+
+## GitHub CLI authentication boundary
+
+The GitHub PR tools use the installed GitHub CLI (`gh`) as an external substrate. Local Codex Bridge checks `gh --version` and `gh auth status -h github.com`, but it does not read, store, print, refresh, or manage GitHub tokens. Configure and audit `gh` authentication outside LCB using normal GitHub CLI practices.

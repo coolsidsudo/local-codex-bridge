@@ -63,8 +63,12 @@ The tool surface is intentionally conservative:
 - `git_create_work_branch` — create and switch to a new local work branch from an existing local base branch.
 - `run_verification` — run an allowlisted verification command.
 - `git_commit_and_push` — after human approval, stage approved files, create one commit, and push it to the current branch on `origin`.
+- `github_create_pr` — create a GitHub pull request for an already-pushed current branch via the installed `gh` CLI.
+- `github_get_pr_status` — read GitHub pull request status/evidence via the installed `gh` CLI.
 
 The bridge does **not** expose arbitrary shell execution in v0. Verification commands are allowlisted per project. `git_create_work_branch` and `git_commit_and_push` are bridge-owned Git operations, not general shell or filesystem tools.
+
+The GitHub PR tools use `gh` as an external substrate. Local Codex Bridge does not implement native GitHub API/token handling and does not store, print, or manage GitHub tokens.
 
 ## Controlled branch workflow
 
@@ -106,12 +110,29 @@ ChatGPT plans/reviews
 - Staged files must exactly match the approved file list before a commit is created.
 - Unsafe input or state returns structured `blocked_*` diagnostics with useful git evidence where relevant.
 
+## Controlled GitHub PR workflow
+
+`github_create_pr` is intended for the post-push review step. It creates a pull request only when the configured repo has an `origin` remote on `github.com`, the current branch is a normal local branch, the worktree is clean, and the current branch already exists on `origin` at the exact local `HEAD`.
+
+Safeguards:
+
+- PR operations use fixed `git` and `gh` argv with `shell=False`; there is no arbitrary `gh` passthrough.
+- `gh --version` and `gh auth status -h github.com` must succeed.
+- Supported public remotes are common HTTPS and SSH `github.com/OWNER/REPO` forms.
+- If `base_branch` is omitted, the bridge reads the repository default branch from `gh repo view`; it does not hard-code `main`.
+- Explicit `base_branch` values are conservatively validated and must exist on `origin`.
+- PR creation is refused from the GitHub default branch or when the current branch equals the selected base branch.
+- Unpublished branches and remote SHA mismatches are refused; C2 does not add push-upstream authority.
+- If an open PR already exists for the current branch, the existing PR evidence is returned instead of creating a duplicate.
+- New PRs are drafts by default; non-draft creation is allowed, but merge and auto-merge remain out of scope.
+
 ## Requirements
 
 - macOS, Linux, or another environment that can run Python and Codex CLI.
 - Python 3.11+.
 - Local OpenAI Codex CLI installed and authenticated.
 - A local git repository you want Codex to work in.
+- Optional for GitHub PR tools: GitHub CLI `gh` installed and authenticated for `github.com`.
 - A tunnel provider such as ngrok or Cloudflare Tunnel if you want ChatGPT to connect from the web.
 - ChatGPT custom MCP connector access.
 

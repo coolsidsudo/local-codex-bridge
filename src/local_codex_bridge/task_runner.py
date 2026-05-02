@@ -20,6 +20,31 @@ UNTRACKED_PREVIEW_MAX_BYTES_PER_FILE = 4096
 UNTRACKED_PREVIEW_MAX_TOTAL_CHARS = 12000
 BRANCH_NAME_MAX_CHARS = 200
 BRANCH_NAME_ALLOWED_RE = re.compile(r"^[A-Za-z0-9._/-]+$")
+COMMAND_ARG_MAX_CHARS = 300
+GITHUB_HTTPS_REMOTE_RE = re.compile(
+    r"^https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?/?$"
+)
+GITHUB_SSH_REMOTE_RE = re.compile(
+    r"^git@github\.com:([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?$"
+)
+GITHUB_PR_JSON_FIELDS = ",".join(
+    [
+        "number",
+        "url",
+        "title",
+        "state",
+        "isDraft",
+        "baseRefName",
+        "headRefName",
+        "headRefOid",
+        "mergeable",
+        "mergeStateStatus",
+        "reviewDecision",
+        "statusCheckRollup",
+        "updatedAt",
+    ]
+)
+GH_JSON_MAX_CHARS = 60000
 
 
 @dataclass
@@ -638,6 +663,259 @@ class TaskRunner:
             "log": log,
         }
 
+    def github_create_pr(
+        self,
+        project_id: str,
+        title: str,
+        body: str,
+        base_branch: str | None = None,
+        draft: bool = True,
+    ) -> dict[str, Any]:
+        project = self._project(project_id)
+        repo = project.path
+
+        if not isinstance(title, str) or not title.strip():
+            return {"status": "blocked_input", "error": "title must not be empty"}
+        if not isinstance(body, str):
+            return {"status": "blocked_input", "error": "body must be a string"}
+        if base_branch is not None and not isinstance(base_branch, str):
+            return {"status": "blocked_input", "error": "base_branch must be a string when provided"}
+
+        local = self._github_pr_local_preflight(repo, require_clean=True)
+        local_evidence = {key: value for key, value in local.items() if key != "status"}
+        evidence: dict[str, Any] = {
+            "project_id": project_id,
+            "path": str(repo),
+            **local_evidence,
+            "requested_base_branch": base_branch,
+            "draft": bool(draft),
+        }
+        if local["status"] != "ok":
+            return {**local, "project_id": project_id, "path": str(repo)}
+
+        current_branch = local["current_branch"]
+        current_remote_style = self._is_remote_style_branch(repo, current_branch)
+        evidence["current_remote_style_check"] = current_remote_style
+        if current_remote_style["status"] != "ok":
+            return {
+                "status": "blocked_git",
+                "error": "Could not inspect git remotes while validating current branch",
+                **evidence,
+            }
+        if current_remote_style["remote_style"]:
+            return {
+                "status": "blocked_input",
+                "error": "current branch must not be remote-style",
+                **evidence,
+            }
+
+        origin = self._github_origin_info(repo)
+        evidence["origin"] = origin
+        if origin["status"] != "ok":
+            return {"status": "blocked_remote", "error": "origin is not a supported GitHub remote", **evidence}
+
+        gh_ready = self._github_cli_ready(repo)
+        evidence["gh"] = gh_ready
+        if gh_ready["status"] != "ok":
+            return {**gh_ready, **evidence}
+
+        repo_view = self._github_repo_view(repo, origin["repo_arg"])
+        evidence["repo_view"] = repo_view
+        if repo_view["status"] != "ok":
+            return {**repo_view, **evidence}
+
+        head_sha = local["head"]["stdout"].strip()
+        default_branch = repo_view["default_branch"]
+        selected_base = base_branch if base_branch is not None else default_branch
+        evidence["base_branch"] = selected_base
+        evidence["github_default_branch"] = default_branch
+
+        base_validation = self._validate_branch_name(repo, selected_base, "base_branch")
+        evidence["base_branch_validation"] = base_validation
+        if base_validation["status"] != "ok":
+            return {"status": "blocked_input", "error": "base_branch is invalid", **evidence}
+
+        if base_branch is not None:
+            base_remote_style = self._is_remote_style_branch(repo, selected_base)
+            evidence["base_remote_style_check"] = base_remote_style
+            if base_remote_style["status"] != "ok":
+                return {
+                    "status": "blocked_git",
+                    "error": "Could not inspect git remotes while validating base_branch",
+                    **evidence,
+                }
+            if base_remote_style["remote_style"]:
+                return {
+                    "status": "blocked_input",
+                    "error": "base_branch must not be remote-style",
+                    **evidence,
+                }
+
+        if current_branch == default_branch:
+            return {
+                "status": "blocked_default_branch",
+                "error": "Refusing to create a PR from the GitHub default branch",
+                **evidence,
+            }
+        if current_branch == selected_base:
+            return {
+                "status": "blocked_branch",
+                "error": "Current branch must differ from the selected base_branch",
+                **evidence,
+            }
+
+        base_remote = self._origin_branch_sha(repo, selected_base)
+        evidence["base_remote"] = base_remote
+        if base_remote["status"] != "ok":
+            return {"status": "blocked_git", "error": "Could not inspect origin base branch", **evidence}
+        if not base_remote["sha"]:
+            return {
+                "status": "blocked_base_branch",
+                "error": "base_branch does not exist on origin",
+                **evidence,
+            }
+
+        current_remote = self._origin_branch_sha(repo, current_branch)
+        evidence["current_remote"] = current_remote
+        if current_remote["status"] != "ok":
+            return {"status": "blocked_git", "error": "Could not inspect origin current branch", **evidence}
+        if not current_remote["sha"]:
+            return {
+                "status": "blocked_unpublished",
+                "error": "Current branch is not published to origin; C2 does not push upstream",
+                **evidence,
+            }
+        if current_remote["sha"] != head_sha:
+            return {
+                "status": "blocked_remote_mismatch",
+                "error": "origin branch SHA differs from local HEAD",
+                **evidence,
+            }
+
+        existing = self._github_prs_for_branch(repo, origin["repo_arg"], current_branch)
+        evidence["existing_prs"] = existing
+        if existing["status"] != "ok":
+            return {**existing, **evidence}
+        if len(existing["prs"]) == 1:
+            return {
+                "status": "existing_pr",
+                "error": "An open PR already exists for the current branch",
+                "pr": existing["prs"][0],
+                **evidence,
+            }
+        if len(existing["prs"]) > 1:
+            return {
+                "status": "blocked_ambiguous_pr",
+                "error": "Multiple open PRs matched the current branch",
+                **evidence,
+            }
+
+        create_cmd = [
+            "gh",
+            "pr",
+            "create",
+            "-R",
+            origin["repo_arg"],
+            "--title",
+            title,
+            "--body",
+            body,
+            "--base",
+            selected_base,
+            "--head",
+            current_branch,
+        ]
+        if draft:
+            create_cmd.append("--draft")
+
+        create = self._run(repo, create_cmd, timeout=120, max_chars=40000)
+        evidence["create"] = self._sanitize_command_result(create)
+        if create["returncode"] != 0:
+            return {"status": "blocked_gh", "error": "gh pr create failed", **evidence}
+
+        parsed_url = self._parse_github_pr_create_url(
+            create["stdout"],
+            origin["owner"],
+            origin["repo"],
+        )
+        evidence["created_pr_url_parse"] = parsed_url
+        if parsed_url["status"] != "ok":
+            return {
+                "status": "blocked_gh_output",
+                "error": "gh pr create did not return the expected GitHub PR URL",
+                **evidence,
+            }
+
+        canonical = self._github_pr_view(repo, origin["repo_arg"], str(parsed_url["number"]))
+        evidence["canonical_pr"] = canonical
+        if canonical["status"] != "ok":
+            return {**canonical, **evidence}
+
+        return {
+            "status": "created",
+            "pr": canonical["pr"],
+            **evidence,
+        }
+
+    def github_get_pr_status(
+        self,
+        project_id: str,
+        pr_url_or_number: str | int | None = None,
+    ) -> dict[str, Any]:
+        project = self._project(project_id)
+        repo = project.path
+
+        origin = self._github_origin_info(repo)
+        evidence: dict[str, Any] = {
+            "project_id": project_id,
+            "path": str(repo),
+            "origin": origin,
+            "requested_pr": pr_url_or_number,
+        }
+        if origin["status"] != "ok":
+            return {"status": "blocked_remote", "error": "origin is not a supported GitHub remote", **evidence}
+
+        gh_ready = self._github_cli_ready(repo)
+        evidence["gh"] = gh_ready
+        if gh_ready["status"] != "ok":
+            return {**gh_ready, **evidence}
+
+        if pr_url_or_number is None:
+            branch = self._current_branch(repo)
+            evidence["current_branch_result"] = branch
+            current_branch = branch["stdout"].strip()
+            evidence["current_branch"] = current_branch or None
+            if branch["returncode"] != 0 or not current_branch:
+                return {
+                    "status": "blocked_detached_head",
+                    "error": "Current branch could not be determined for branch PR lookup",
+                    **evidence,
+                }
+            prs = self._github_prs_for_branch(repo, origin["repo_arg"], current_branch)
+            evidence["prs_for_branch"] = prs
+            if prs["status"] != "ok":
+                return {**prs, **evidence}
+            if not prs["prs"]:
+                return {"status": "no_pr", "error": "No open PR found for current branch", **evidence}
+            if len(prs["prs"]) > 1:
+                return {
+                    "status": "blocked_ambiguous_pr",
+                    "error": "Multiple open PRs matched the current branch",
+                    **evidence,
+                }
+            return {"status": "ok", "pr": prs["prs"][0], **evidence}
+
+        parsed = self._parse_pr_reference(pr_url_or_number, origin["owner"], origin["repo"])
+        evidence["parsed_pr_reference"] = parsed
+        if parsed["status"] != "ok":
+            return {"status": "blocked_input", "error": "Invalid PR number or URL", **evidence}
+
+        canonical = self._github_pr_view(repo, origin["repo_arg"], parsed["reference"])
+        evidence["canonical_pr"] = canonical
+        if canonical["status"] != "ok":
+            return {**canonical, **evidence}
+        return {"status": "ok", "pr": canonical["pr"], **evidence}
+
     def list_tasks(self, limit: int = 20) -> list[dict[str, Any]]:
         task_dirs = sorted(self.config.server.task_dir.glob("*"), key=lambda p: p.name, reverse=True)
         items = []
@@ -651,6 +929,281 @@ class TaskRunner:
                 except Exception as exc:  # noqa: BLE001
                     items.append({"task_id": task_dir.name, "error": str(exc)})
         return items
+
+    def _github_pr_local_preflight(self, repo: Path, require_clean: bool) -> dict[str, Any]:
+        short_status = self._run(repo, ["git", "status", "--short", "--branch"], timeout=20)
+        porcelain_status = self._porcelain_status(repo)
+        head = self._run(repo, ["git", "rev-parse", "--verify", "HEAD"], timeout=20)
+        current_branch_result = self._current_branch(repo)
+        current_branch = current_branch_result["stdout"].strip()
+
+        evidence = {
+            "short_status": short_status,
+            "porcelain_status": porcelain_status,
+            "head": head,
+            "current_branch_result": current_branch_result,
+            "current_branch": current_branch or None,
+        }
+        for key in ["short_status", "porcelain_status", "head", "current_branch_result"]:
+            if evidence[key]["returncode"] != 0:
+                return {
+                    "status": "blocked_git",
+                    "error": f"git command failed while collecting {key}",
+                    **evidence,
+                }
+        if not current_branch:
+            return {
+                "status": "blocked_detached_head",
+                "error": "Current branch could not be determined; refusing from detached or invalid HEAD",
+                **evidence,
+            }
+        if require_clean and porcelain_status["stdout"]:
+            return {
+                "status": "blocked_dirty",
+                "error": "Worktree is dirty; refusing to create a GitHub PR",
+                **evidence,
+            }
+        return {"status": "ok", **evidence}
+
+    def _github_origin_info(self, repo: Path) -> dict[str, Any]:
+        origin_url = self._run(repo, ["git", "remote", "get-url", "origin"], timeout=20)
+        sanitized_result = self._sanitize_command_result(origin_url)
+        if origin_url["returncode"] != 0:
+            return {
+                "status": "blocked_remote",
+                "error": "Could not read origin remote URL",
+                "origin_url": sanitized_result,
+            }
+
+        raw_url = origin_url["stdout"].strip()
+        sanitized_url = self._sanitize_text(raw_url)
+        match = GITHUB_HTTPS_REMOTE_RE.fullmatch(raw_url) or GITHUB_SSH_REMOTE_RE.fullmatch(raw_url)
+        if not match:
+            return {
+                "status": "blocked_remote",
+                "error": "origin is not a supported github.com remote URL",
+                "origin_url": sanitized_result,
+                "sanitized_origin_url": sanitized_url,
+            }
+
+        owner, repo_name = match.groups()
+        repo_arg = f"{owner}/{repo_name}"
+        return {
+            "status": "ok",
+            "owner": owner,
+            "repo": repo_name,
+            "repo_arg": repo_arg,
+            "origin_url": sanitized_result,
+            "sanitized_origin_url": sanitized_url,
+        }
+
+    def _github_cli_ready(self, repo: Path) -> dict[str, Any]:
+        version = self._sanitize_command_result(self._run(repo, ["gh", "--version"], timeout=20))
+        if version["returncode"] == 127:
+            return {"status": "blocked_gh", "error": "gh CLI is unavailable", "version": version}
+        if version["returncode"] != 0:
+            return {"status": "blocked_gh", "error": "gh --version failed", "version": version}
+
+        auth = self._sanitize_command_result(
+            self._run(repo, ["gh", "auth", "status", "-h", "github.com"], timeout=20)
+        )
+        if auth["returncode"] != 0:
+            return {
+                "status": "blocked_gh_auth",
+                "error": "gh auth status failed for github.com",
+                "version": version,
+                "auth": auth,
+            }
+        return {"status": "ok", "version": version, "auth": auth}
+
+    def _github_repo_view(self, repo: Path, repo_arg: str) -> dict[str, Any]:
+        result = self._gh_json(
+            repo,
+            ["gh", "repo", "view", repo_arg, "--json", "nameWithOwner,defaultBranchRef"],
+            expected_type=dict,
+        )
+        if result["status"] != "ok":
+            return result
+        data = result["json"]
+        default_ref = data.get("defaultBranchRef")
+        default_branch = default_ref.get("name") if isinstance(default_ref, dict) else None
+        if not isinstance(data.get("nameWithOwner"), str) or not isinstance(default_branch, str):
+            return {
+                "status": "blocked_gh_output",
+                "error": "gh repo view returned unexpected JSON shape",
+                **result,
+            }
+        return {**result, "name_with_owner": data["nameWithOwner"], "default_branch": default_branch}
+
+    def _github_prs_for_branch(
+        self,
+        repo: Path,
+        repo_arg: str,
+        branch: str,
+    ) -> dict[str, Any]:
+        return self._gh_json(
+            repo,
+            [
+                "gh",
+                "pr",
+                "list",
+                "-R",
+                repo_arg,
+                "--head",
+                branch,
+                "--state",
+                "open",
+                "--json",
+                GITHUB_PR_JSON_FIELDS,
+                "--limit",
+                "10",
+            ],
+            expected_type=list,
+            list_key="prs",
+        )
+
+    def _github_pr_view(self, repo: Path, repo_arg: str, reference: str) -> dict[str, Any]:
+        return self._gh_json(
+            repo,
+            [
+                "gh",
+                "pr",
+                "view",
+                reference,
+                "-R",
+                repo_arg,
+                "--json",
+                GITHUB_PR_JSON_FIELDS,
+            ],
+            expected_type=dict,
+            dict_key="pr",
+        )
+
+    def _gh_json(
+        self,
+        repo: Path,
+        cmd: list[str],
+        expected_type: type,
+        list_key: str | None = None,
+        dict_key: str | None = None,
+    ) -> dict[str, Any]:
+        result = self._run(repo, cmd, timeout=60, max_chars=GH_JSON_MAX_CHARS)
+        sanitized = self._sanitize_command_result(result)
+        if result["returncode"] != 0:
+            return {"status": "blocked_gh", "error": "gh command failed", "command": sanitized}
+        try:
+            parsed = json.loads(result["stdout"])
+        except json.JSONDecodeError:
+            return {
+                "status": "blocked_gh_output",
+                "error": "gh command returned invalid JSON",
+                "command": sanitized,
+            }
+        if not isinstance(parsed, expected_type):
+            return {
+                "status": "blocked_gh_output",
+                "error": "gh command returned unexpected JSON type",
+                "command": sanitized,
+                "json": parsed,
+            }
+        payload: dict[str, Any] = {"status": "ok", "command": sanitized, "json": parsed}
+        if list_key:
+            payload[list_key] = parsed
+        if dict_key:
+            payload[dict_key] = parsed
+        return payload
+
+    def _origin_branch_sha(self, repo: Path, branch: str) -> dict[str, Any]:
+        result = self._sanitize_command_result(
+            self._run(repo, ["git", "ls-remote", "--heads", "origin", branch], timeout=30)
+        )
+        if result["returncode"] != 0:
+            return {"status": "blocked_git", "sha": None, "ls_remote": result}
+
+        lines = [line for line in result["stdout"].splitlines() if line.strip()]
+        if not lines:
+            return {"status": "ok", "sha": None, "ls_remote": result}
+        if len(lines) != 1:
+            return {"status": "blocked_git", "sha": None, "ls_remote": result}
+
+        parts = lines[0].split()
+        expected_ref = f"refs/heads/{branch}"
+        if len(parts) != 2 or parts[1] != expected_ref:
+            return {"status": "blocked_git", "sha": None, "ls_remote": result}
+        return {"status": "ok", "sha": parts[0], "ref": parts[1], "ls_remote": result}
+
+    def _parse_github_pr_create_url(self, output: str, owner: str, repo: str) -> dict[str, Any]:
+        line = output.strip()
+        pattern = rf"^https://github\.com/{re.escape(owner)}/{re.escape(repo)}/pull/([1-9][0-9]*)$"
+        match = re.fullmatch(pattern, line)
+        if not match:
+            return {"status": "blocked_gh_output", "url": self._sanitize_text(line), "number": None}
+        return {"status": "ok", "url": line, "number": int(match.group(1))}
+
+    def _parse_pr_reference(self, value: str | int, owner: str, repo: str) -> dict[str, Any]:
+        if isinstance(value, int):
+            if value <= 0:
+                return {"status": "blocked_input"}
+            return {"status": "ok", "reference": str(value)}
+
+        if not isinstance(value, str):
+            return {"status": "blocked_input"}
+        stripped = value.strip()
+        if not stripped or stripped != value:
+            return {"status": "blocked_input"}
+        if re.fullmatch(r"[1-9][0-9]*", stripped):
+            return {"status": "ok", "reference": stripped}
+
+        parsed = self._parse_github_pr_create_url(stripped, owner, repo)
+        if parsed["status"] == "ok":
+            return {"status": "ok", "reference": stripped}
+        return {"status": "blocked_input"}
+
+    def _sanitize_command_result(self, result: dict[str, Any]) -> dict[str, Any]:
+        sanitized = dict(result)
+        sanitized["cmd"] = self._sanitize_command_args(result.get("cmd", []))
+        sanitized["stdout"] = self._sanitize_text(str(result.get("stdout", "")))
+        sanitized["stderr"] = self._sanitize_text(str(result.get("stderr", "")))
+        return sanitized
+
+    def _sanitize_command_args(self, cmd: Any) -> list[str]:
+        if not isinstance(cmd, list):
+            return []
+
+        args = [self._bound_command_arg(self._sanitize_text(str(part))) for part in cmd]
+        if args[:3] != ["gh", "pr", "create"]:
+            return args
+
+        redacted = list(args)
+        for flag, replacement in [
+            ("--title", "<redacted-pr-title>"),
+            ("--body", "<redacted-pr-body>"),
+        ]:
+            try:
+                index = redacted.index(flag)
+            except ValueError:
+                continue
+            if index + 1 < len(redacted):
+                redacted[index + 1] = replacement
+        return redacted
+
+    def _bound_command_arg(self, arg: str) -> str:
+        if len(arg) <= COMMAND_ARG_MAX_CHARS:
+            return arg
+        return f"{arg[:COMMAND_ARG_MAX_CHARS]}…<truncated>"
+
+    def _sanitize_text(self, text: str) -> str:
+        text = re.sub(
+            r"https://[^/:\s@]+:[^/\s@]+@github\.com/",
+            "https://<redacted>@github.com/",
+            text,
+        )
+        text = re.sub(
+            r"https://[^/\s@]+@github\.com/",
+            "https://<redacted>@github.com/",
+            text,
+        )
+        return text
 
     def _normalize_approved_files(self, repo: Path, files: list[str]) -> dict[str, Any]:
         approved_files: list[str] = []
@@ -1019,15 +1572,23 @@ class TaskRunner:
         max_chars: int = 20000,
     ) -> dict[str, Any]:
         max_chars = max(0, max_chars)
-        proc = subprocess.run(
-            cmd,
-            cwd=str(cwd),
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=timeout,
-            shell=False,
-        )
+        try:
+            proc = subprocess.run(
+                cmd,
+                cwd=str(cwd),
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=timeout,
+                shell=False,
+            )
+        except FileNotFoundError as exc:
+            return {
+                "cmd": cmd,
+                "returncode": 127,
+                "stdout": "",
+                "stderr": str(exc),
+            }
         stdout = proc.stdout[-max_chars:] if max_chars else ""
         stderr = proc.stderr[-max_chars:] if max_chars else ""
         return {

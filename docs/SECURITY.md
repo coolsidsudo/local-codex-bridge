@@ -16,6 +16,7 @@ Local Codex Bridge is project-agnostic: configured project roots are trust bound
 - Review staged/unstaged diffs, bounded untracked previews, and verification output before accepting changes.
 - Use `git_create_work_branch` only when the configured repo is clean and the intended base branch is clear.
 - Use `git_commit_and_push` only after explicit human approval of the exact files and commit message.
+- Use `github_create_pr` only after the current branch has already been intentionally pushed to `origin`.
 - Keep secrets out of task prompts and logs.
 - Do not publish temporary tunnel URLs in public issues or documentation.
 
@@ -81,6 +82,24 @@ The bridge tries to avoid staging unapproved files in the first place and verifi
 
 When a failure may leave changes staged, the response reports that staged-state risk. Operators should inspect git state before retrying, especially after `blocked_add`, `blocked_staged_files`, `blocked_commit`, or `blocked_push` responses.
 
+## Controlled GitHub PR tools
+
+`github_create_pr` and `github_get_pr_status` are bridge-owned GitHub PR operations backed only by the installed GitHub CLI (`gh`). They do not implement native GitHub API calls, do not manage GitHub tokens, and do not print token values. `gh` authentication remains external operator-controlled state.
+
+Safeguards:
+
+- PR operations use fixed `git` and `gh` argument vectors with `shell=False`; no arbitrary shell execution or generic `gh` passthrough is exposed.
+- The `origin` remote must be a supported public `github.com` HTTPS or SSH URL. Non-GitHub remotes fail closed with structured `blocked_remote` evidence.
+- `gh --version` and `gh auth status -h github.com` must succeed before GitHub PR operations.
+- `github_create_pr` requires a normal local branch, refuses detached HEAD, and requires a clean worktree.
+- The current branch must already exist on `origin` at the exact local `HEAD`; unpublished branches and remote SHA mismatches are refused.
+- C2 intentionally does not add push-upstream authority. Pushing an unpublished branch would require a separate, explicit controlled Git slice.
+- If `base_branch` is omitted, the GitHub default branch is read through `gh repo view`; no universal `main` base is hard-coded.
+- Explicit base branches are conservatively validated and must exist on `origin`.
+- PR creation is refused from the GitHub default branch and when the current branch equals the selected base branch.
+- Existing open PRs for the current branch are returned as evidence instead of creating duplicates.
+- Draft PRs are the default. Non-draft creation is allowed, but merge, auto-merge, admin bypass, and release/tag operations are not exposed.
+
 ## Tunnels and platform gating
 
 Tunnels are external deployment layers, not core bridge runtime. The Python bridge serves MCP on the configured host/port, normally `127.0.0.1:8765`.
@@ -96,3 +115,4 @@ ChatGPT-side developer MCP errors such as `FORBIDDEN: This conversation does not
 - No streaming live logs; polling is supported.
 - Branch creation is local-only and refuses dirty or detached state.
 - Remote selection for `git_commit_and_push` is currently constrained to `origin`.
+- GitHub PR creation/status requires `gh` and supports public `github.com` remotes only; no merge or push-upstream tool is included.
