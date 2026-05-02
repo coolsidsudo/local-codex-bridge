@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import signal
 import subprocess
 import time
@@ -17,6 +18,8 @@ UNTRACKED_LIST_MAX_FILES = 200
 UNTRACKED_PREVIEW_MAX_FILES = 20
 UNTRACKED_PREVIEW_MAX_BYTES_PER_FILE = 4096
 UNTRACKED_PREVIEW_MAX_TOTAL_CHARS = 12000
+BRANCH_NAME_MAX_CHARS = 200
+BRANCH_NAME_ALLOWED_RE = re.compile(r"^[A-Za-z0-9._/-]+$")
 
 
 @dataclass
@@ -186,6 +189,278 @@ class TaskRunner:
             "staged_diff": staged_diff,
             "untracked_files": untracked_files,
             "untracked_previews": untracked_previews,
+        }
+
+    def git_get_branch_status(self, project_id: str) -> dict[str, Any]:
+        project = self._project(project_id)
+        repo = project.path
+
+        short_status = self._run(repo, ["git", "status", "--short", "--branch"], timeout=20)
+        porcelain_status = self._porcelain_status(repo)
+        head = self._run(repo, ["git", "rev-parse", "--verify", "HEAD"], timeout=20)
+        remotes = self._run(repo, ["git", "remote", "-v"], timeout=20)
+        current_branch_result = self._current_branch(repo)
+        current_branch = current_branch_result.get("stdout", "").strip()
+        upstream_info = self._upstream_info(repo)
+
+        evidence = {
+            "project_id": project_id,
+            "path": str(repo),
+            "current_branch": current_branch or None,
+            "detached": current_branch_result["returncode"] != 0 or not current_branch,
+            "dirty": porcelain_status["returncode"] == 0 and bool(porcelain_status["stdout"]),
+            "head": head,
+            "short_status": short_status,
+            "porcelain_status": porcelain_status,
+            "remotes": remotes,
+            "current_branch_result": current_branch_result,
+            **upstream_info,
+        }
+
+        blocking_failures = [
+            ("short_status", short_status),
+            ("porcelain_status", porcelain_status),
+            ("head", head),
+            ("remotes", remotes),
+            ("current_branch_result", current_branch_result),
+        ]
+        for key, result in blocking_failures:
+            if result["returncode"] != 0:
+                return {
+                    "status": "blocked_git",
+                    "error": f"git command failed while collecting {key}",
+                    **evidence,
+                }
+
+        if upstream_info.get("upstream") and upstream_info["ahead_behind_result"]["returncode"] != 0:
+            return {
+                "status": "blocked_git",
+                "error": "git command failed while collecting upstream ahead/behind",
+                **evidence,
+            }
+
+        return {"status": "ok", **evidence}
+
+    def git_create_work_branch(
+        self,
+        project_id: str,
+        branch_name: str,
+        base_branch: str | None = None,
+    ) -> dict[str, Any]:
+        project = self._project(project_id)
+        repo = project.path
+
+        branch_validation = self._validate_branch_name(repo, branch_name, "branch_name")
+        if branch_validation["status"] != "ok":
+            return branch_validation
+        new_branch = branch_validation["name"]
+
+        target_remote_style_result = self._is_remote_style_branch(repo, new_branch)
+        if target_remote_style_result["status"] != "ok":
+            return {
+                "status": "blocked_git",
+                "error": "Could not inspect git remotes while validating branch name",
+                "project_id": project_id,
+                "path": str(repo),
+                "requested_branch": branch_name,
+                "created_branch": new_branch,
+                "branch_name_check_ref_format": branch_validation["check_ref_format"],
+                "target_remote_style_check": target_remote_style_result,
+            }
+        if target_remote_style_result["remote_style"]:
+            return {
+                "status": "blocked_input",
+                "error": "branch_name must not be a remote-style branch",
+                "project_id": project_id,
+                "path": str(repo),
+                "requested_branch": branch_name,
+                "created_branch": new_branch,
+                "branch_name_check_ref_format": branch_validation["check_ref_format"],
+                "target_remote_style_check": target_remote_style_result,
+            }
+
+        status_before = self._run(repo, ["git", "status", "--short", "--branch"], timeout=20)
+        porcelain_status_before = self._porcelain_status(repo)
+        head_before = self._run(repo, ["git", "rev-parse", "--verify", "HEAD"], timeout=20)
+        remotes = self._run(repo, ["git", "remote", "-v"], timeout=20)
+        current_branch_result = self._current_branch(repo)
+        current_branch_before = current_branch_result.get("stdout", "").strip()
+        upstream_before = self._upstream_info(repo, suffix="_before")
+
+        evidence: dict[str, Any] = {
+            "project_id": project_id,
+            "path": str(repo),
+            "requested_branch": branch_name,
+            "created_branch": new_branch,
+            "requested_base_branch": base_branch,
+            "current_branch_before": current_branch_before or None,
+            "current_branch_result": current_branch_result,
+            "head_before": head_before,
+            "status_before": status_before,
+            "porcelain_status_before": porcelain_status_before,
+            "remotes": remotes,
+            "branch_name_check_ref_format": branch_validation["check_ref_format"],
+            "target_remote_style_check": target_remote_style_result,
+            **upstream_before,
+        }
+
+        for key, result in [
+            ("status_before", status_before),
+            ("porcelain_status_before", porcelain_status_before),
+            ("head_before", head_before),
+            ("remotes", remotes),
+            ("current_branch_result", current_branch_result),
+        ]:
+            if result["returncode"] != 0:
+                return {
+                    "status": "blocked_git",
+                    "error": f"git command failed while collecting {key}",
+                    **evidence,
+                }
+
+        if upstream_before.get("upstream_before") and upstream_before[
+            "ahead_behind_result_before"
+        ]["returncode"] != 0:
+            return {
+                "status": "blocked_git",
+                "error": "git command failed while collecting upstream ahead/behind",
+                **evidence,
+            }
+
+        if porcelain_status_before["stdout"]:
+            return {
+                "status": "blocked_dirty",
+                "error": "Worktree is dirty; refusing to create or switch branches",
+                **evidence,
+            }
+
+        if not current_branch_before:
+            return {
+                "status": "blocked_detached_head",
+                "error": "Current branch could not be determined; refusing from detached or invalid HEAD",
+                **evidence,
+            }
+
+        effective_base = base_branch if base_branch is not None else current_branch_before
+        base_validation = self._validate_branch_name(repo, effective_base, "base_branch")
+        if base_validation["status"] != "ok":
+            return {**base_validation, **evidence, "base_branch": effective_base}
+        base_name = base_validation["name"]
+        evidence["base_branch"] = base_name
+        evidence["base_branch_check_ref_format"] = base_validation["check_ref_format"]
+
+        remote_style_result = self._is_remote_style_branch(repo, base_name)
+        evidence["base_remote_style_check"] = remote_style_result
+        if remote_style_result["status"] != "ok":
+            return {
+                "status": "blocked_git",
+                "error": "Could not inspect git remotes while validating base branch",
+                **evidence,
+            }
+        if remote_style_result["remote_style"]:
+            return {
+                "status": "blocked_input",
+                "error": "base_branch must be an existing local branch name, not a remote-style branch",
+                **evidence,
+            }
+
+        existing_branch = self._local_branch_exists(repo, new_branch)
+        evidence["existing_branch"] = existing_branch
+        if existing_branch["status"] == "blocked_git":
+            return {
+                "status": "blocked_git",
+                "error": "Could not determine whether branch already exists",
+                **evidence,
+            }
+        if existing_branch["exists"]:
+            return {
+                "status": "blocked_branch_exists",
+                "error": "Target branch already exists; switching existing branches is deferred",
+                **evidence,
+            }
+
+        base_exists = self._local_branch_exists(repo, base_name)
+        evidence["base_branch_exists"] = base_exists
+        if base_exists["status"] == "blocked_git":
+            return {
+                "status": "blocked_git",
+                "error": "Could not determine whether base branch exists",
+                **evidence,
+            }
+        if not base_exists["exists"]:
+            return {
+                "status": "blocked_base_branch",
+                "error": "base_branch must be an existing local branch name",
+                **evidence,
+            }
+
+        base_head = self._run(
+            repo,
+            ["git", "rev-parse", "--verify", "--quiet", f"refs/heads/{base_name}^{{commit}}"],
+            timeout=20,
+        )
+        evidence["base_ref"] = f"refs/heads/{base_name}"
+        evidence["base_head"] = base_head
+        if base_head["returncode"] != 0:
+            return {
+                "status": "blocked_base_branch",
+                "error": "Could not resolve base branch to a commit",
+                **evidence,
+            }
+
+        create = self._run(
+            repo,
+            ["git", "switch", "--no-track", "-c", new_branch, base_name],
+            timeout=120,
+            max_chars=40000,
+        )
+        if create["returncode"] != 0:
+            return {
+                "status": "blocked_git",
+                "error": "git switch failed; branch was not created",
+                **evidence,
+                "create": create,
+                "status_after": self._run(repo, ["git", "status", "--short", "--branch"], timeout=20),
+                "porcelain_status_after": self._porcelain_status(repo),
+                "current_branch_after_result": self._current_branch(repo),
+                "head_after": self._run(repo, ["git", "rev-parse", "--verify", "HEAD"], timeout=20),
+            }
+
+        current_branch_after_result = self._current_branch(repo)
+        current_branch_after = current_branch_after_result.get("stdout", "").strip()
+        status_after = self._run(repo, ["git", "status", "--short", "--branch"], timeout=20)
+        porcelain_status_after = self._porcelain_status(repo)
+        head_after = self._run(repo, ["git", "rev-parse", "--verify", "HEAD"], timeout=20)
+        upstream_after = self._upstream_info(repo, suffix="_after")
+        after_evidence = {
+            "create": create,
+            "current_branch_after": current_branch_after or None,
+            "current_branch_after_result": current_branch_after_result,
+            "head_after": head_after,
+            "status_after": status_after,
+            "porcelain_status_after": porcelain_status_after,
+            **upstream_after,
+        }
+
+        final_state_verified = (
+            current_branch_after_result["returncode"] == 0
+            and current_branch_after == new_branch
+            and head_after["returncode"] == 0
+            and status_after["returncode"] == 0
+            and porcelain_status_after["returncode"] == 0
+        )
+        if not final_state_verified:
+            return {
+                "status": "blocked_git",
+                "error": "git switch succeeded but final branch state could not be verified",
+                **evidence,
+                **after_evidence,
+            }
+
+        return {
+            "status": "created",
+            **evidence,
+            **after_evidence,
         }
 
     def run_verification(self, project_id: str, command_key: str, timeout: int = 600) -> dict[str, Any]:
@@ -402,6 +677,114 @@ class TaskRunner:
 
     def _current_branch(self, repo: Path) -> dict[str, Any]:
         return self._run(repo, ["git", "branch", "--show-current"], timeout=20)
+
+    def _porcelain_status(self, repo: Path) -> dict[str, Any]:
+        return self._run(
+            repo,
+            ["git", "status", "--porcelain=v1", "--untracked-files=normal"],
+            timeout=20,
+        )
+
+    def _upstream_info(self, repo: Path, suffix: str = "") -> dict[str, Any]:
+        upstream_result = self._run(
+            repo,
+            ["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
+            timeout=20,
+        )
+        upstream = upstream_result["stdout"].strip() if upstream_result["returncode"] == 0 else None
+        ahead_behind = None
+        ahead_behind_result: dict[str, Any] | None = None
+
+        if upstream:
+            ahead_behind_result = self._run(
+                repo,
+                ["git", "rev-list", "--left-right", "--count", "@{upstream}...HEAD"],
+                timeout=20,
+            )
+            if ahead_behind_result["returncode"] == 0:
+                parts = ahead_behind_result["stdout"].strip().split()
+                if len(parts) == 2:
+                    try:
+                        behind, ahead = (int(parts[0]), int(parts[1]))
+                    except ValueError:
+                        ahead_behind = None
+                    else:
+                        ahead_behind = {"ahead": ahead, "behind": behind}
+        else:
+            ahead_behind_result = {
+                "cmd": ["git", "rev-list", "--left-right", "--count", "@{upstream}...HEAD"],
+                "returncode": None,
+                "stdout": "",
+                "stderr": "skipped because no upstream is configured",
+            }
+
+        return {
+            f"upstream{suffix}": upstream,
+            f"upstream_result{suffix}": upstream_result,
+            f"ahead_behind{suffix}": ahead_behind,
+            f"ahead_behind_result{suffix}": ahead_behind_result,
+        }
+
+    def _validate_branch_name(self, repo: Path, name: str, field: str) -> dict[str, Any]:
+        if not isinstance(name, str):
+            return {"status": "blocked_input", "error": f"{field} must be a string"}
+        if name != name.strip():
+            return {"status": "blocked_input", "error": f"{field} must not have surrounding whitespace"}
+        if not name:
+            return {"status": "blocked_input", "error": f"{field} must not be empty"}
+        if len(name) > BRANCH_NAME_MAX_CHARS:
+            return {"status": "blocked_input", "error": f"{field} is too long"}
+        if not name.isascii():
+            return {"status": "blocked_input", "error": f"{field} must be ASCII"}
+        if any(char.isspace() for char in name):
+            return {"status": "blocked_input", "error": f"{field} must not contain whitespace"}
+        if name == "HEAD":
+            return {"status": "blocked_input", "error": f"{field} must not be HEAD"}
+        if name.startswith("refs/"):
+            return {"status": "blocked_input", "error": f"{field} must not start with refs/"}
+        if name[0] in {".", "/", "-"}:
+            return {"status": "blocked_input", "error": f"{field} has an unsafe prefix"}
+        if name[-1] in {".", "/"} or name.endswith(".lock"):
+            return {"status": "blocked_input", "error": f"{field} has an unsafe suffix"}
+        if not BRANCH_NAME_ALLOWED_RE.fullmatch(name):
+            return {"status": "blocked_input", "error": f"{field} contains unsafe punctuation"}
+        unsafe_tokens = ["..", "//", "@{", "\\", ":", "~", "^", "?", "*", "["]
+        if any(token in name for token in unsafe_tokens):
+            return {"status": "blocked_input", "error": f"{field} contains unsafe ref syntax"}
+
+        check_ref_format = self._run(repo, ["git", "check-ref-format", "--branch", name], timeout=20)
+        if check_ref_format["returncode"] != 0:
+            return {
+                "status": "blocked_input",
+                "error": f"{field} is not a valid git branch name",
+                "check_ref_format": check_ref_format,
+            }
+        return {"status": "ok", "name": name, "check_ref_format": check_ref_format}
+
+    def _local_branch_exists(self, repo: Path, branch_name: str) -> dict[str, Any]:
+        result = self._run(
+            repo,
+            ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{branch_name}"],
+            timeout=20,
+        )
+        if result["returncode"] == 0:
+            return {"status": "ok", "exists": True, "show_ref": result}
+        if result["returncode"] == 1:
+            return {"status": "ok", "exists": False, "show_ref": result}
+        return {"status": "blocked_git", "exists": None, "show_ref": result}
+
+    def _is_remote_style_branch(self, repo: Path, branch_name: str) -> dict[str, Any]:
+        remotes = self._run(repo, ["git", "remote"], timeout=20)
+        if remotes["returncode"] != 0:
+            return {"status": "blocked_git", "remote_style": None, "remotes": remotes}
+        remote_names = {line.strip() for line in remotes["stdout"].splitlines() if line.strip()}
+        remote_names.update({"origin", "upstream"})
+        first_segment = branch_name.split("/", 1)[0]
+        return {
+            "status": "ok",
+            "remote_style": "/" in branch_name and first_segment in remote_names,
+            "remotes": remotes,
+        }
 
     def _staged_files(self, repo: Path) -> dict[str, Any]:
         result = self._run(

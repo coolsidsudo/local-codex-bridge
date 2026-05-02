@@ -36,6 +36,7 @@ Local Codex Bridge
   -> runs on the operator's machine
   -> exposes configured project profiles and allowlisted operations
   -> invokes local Codex CLI inside the selected repo
+  -> can create a controlled local work branch before edits
   -> can perform a controlled, human-approved git add/commit/push for approved files
 
 Local Codex CLI
@@ -58,10 +59,25 @@ The tool surface is intentionally conservative:
 - `list_tasks` — list recent bridge task records.
 - `abort_task` — terminate a running local Codex process.
 - `get_git_diff` — inspect git status, unstaged/staged diffs, and bounded untracked file previews.
+- `git_get_branch_status` — report current branch, dirty state, HEAD, remotes, upstream, and ahead/behind evidence.
+- `git_create_work_branch` — create and switch to a new local work branch from an existing local base branch.
 - `run_verification` — run an allowlisted verification command.
 - `git_commit_and_push` — after human approval, stage approved files, create one commit, and push it to the current branch on `origin`.
 
-The bridge does **not** expose arbitrary shell execution in v0. Verification commands are allowlisted per project. `git_commit_and_push` is a bridge-owned Git acceptance operation, not a general shell or filesystem tool.
+The bridge does **not** expose arbitrary shell execution in v0. Verification commands are allowlisted per project. `git_create_work_branch` and `git_commit_and_push` are bridge-owned Git operations, not general shell or filesystem tools.
+
+## Controlled branch workflow
+
+`git_create_work_branch` is intended to move a clean configured repo onto a safe feature/work branch before Codex edits begin. Its safeguards include:
+
+- It accepts only local branch names and does not hard-code `main` as a universal base.
+- If `base_branch` is omitted, it uses the current checked-out branch.
+- `base_branch` must be an existing local branch; remote-style bases such as `origin/main`, full refs such as `refs/heads/main`, and `HEAD` are refused.
+- The target branch must not already exist; switching existing branches is deferred.
+- The worktree must be clean according to `git status --porcelain=v1 --untracked-files=normal`.
+- Detached HEAD is refused.
+- Branch names must pass conservative Local Codex Bridge validation and `git check-ref-format --branch`.
+- It creates and checks out the new branch locally, but does not push, merge, delete branches, create PRs, or touch tags.
 
 ## Controlled acceptance flow
 
@@ -388,6 +404,8 @@ get_task
 list_tasks
 abort_task
 get_git_diff
+git_get_branch_status
+git_create_work_branch
 run_verification
 git_commit_and_push
 ```

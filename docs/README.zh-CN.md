@@ -36,6 +36,7 @@ Local Codex Bridge
   -> 运行在操作者自己的机器上
   -> 只暴露已配置的项目 profile 和 allowlist 操作
   -> 在指定 repo 内调用本地 Codex CLI
+  -> 可以在修改前创建受控的本地工作分支
   -> 可以对已批准文件执行受控的、人工批准的 git add/commit/push
 
 Local Codex CLI
@@ -58,10 +59,25 @@ GitHub 或其他 VCS host
 - `list_tasks` — 列出最近的 bridge 任务记录。
 - `abort_task` — 终止正在运行的本地 Codex 进程。
 - `get_git_diff` — 检查 git status、unstaged/staged diffs，以及有边界的 untracked 文件预览。
+- `git_get_branch_status` — 返回当前分支、dirty 状态、HEAD、remotes、upstream 和 ahead/behind 证据。
+- `git_create_work_branch` — 基于已有本地 base 分支创建并切换到新的本地工作分支。
 - `run_verification` — 运行项目配置中 allowlist 的验证命令。
 - `git_commit_and_push` — 在人工批准后，stage 已批准文件、创建一个 commit，并 push 到 `origin` 上的当前分支。
 
-v0 不暴露任意 shell 执行。验证命令必须在每个项目 profile 中显式 allowlist。`git_commit_and_push` 是 bridge 自有的 Git acceptance 操作，不是通用 shell 或通用文件系统工具。
+v0 不暴露任意 shell 执行。验证命令必须在每个项目 profile 中显式 allowlist。`git_create_work_branch` 和 `git_commit_and_push` 是 bridge 自有的 Git 操作，不是通用 shell 或通用文件系统工具。
+
+## 受控分支工作流
+
+`git_create_work_branch` 用于在 Codex 开始修改前，把干净的已配置 repo 移到安全的 feature / work 分支。它的安全措施包括：
+
+- 只接受本地分支名，不把 `main` 硬编码为通用 base。
+- 如果省略 `base_branch`，使用当前 checkout 的分支。
+- `base_branch` 必须是已存在的本地分支；拒绝 `origin/main` 这类 remote-style base、`refs/heads/main` 这类完整 ref，以及 `HEAD`。
+- 目标分支不能已经存在；切换已有分支暂不支持。
+- worktree 必须按 `git status --porcelain=v1 --untracked-files=normal` 判断为干净。
+- 拒绝 detached HEAD。
+- 分支名必须通过 Local Codex Bridge 的保守校验和 `git check-ref-format --branch`。
+- 它会在本地创建并 checkout 新分支，但不会 push、merge、删除分支、创建 PR，或触碰 tags。
 
 ## 受控 acceptance 流程
 
@@ -388,6 +404,8 @@ get_task
 list_tasks
 abort_task
 get_git_diff
+git_get_branch_status
+git_create_work_branch
 run_verification
 git_commit_and_push
 ```

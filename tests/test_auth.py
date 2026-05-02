@@ -547,4 +547,7 @@ async def test_static_bearer_http_endpoint_rejects_unauthenticated_and_accepts_v
         async with Client(url, auth=SECRET_TOKEN) as client:
             tools = await client.list_tools()
 
-    assert any(tool.name == "list_projects" for tool in tools)
+    tool_names = {tool.name for tool in tools}
+    assert "list_projects" in tool_names
+    assert "git_get_branch_status" in tool_names
+    assert "git_create_work_branch" in tool_names

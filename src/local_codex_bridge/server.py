@@ -72,6 +72,24 @@ def build_mcp(config: str | Path | BridgeConfig) -> FastMCP:
         return runner.git_diff(project_id, max_chars=max_chars)
 
     @mcp.tool
+    def git_get_branch_status(project_id: str) -> dict[str, Any]:
+        """Return current branch, dirty, upstream, ahead/behind, HEAD, and remote evidence."""
+        return runner.git_get_branch_status(project_id)
+
+    @mcp.tool
+    def git_create_work_branch(
+        project_id: str,
+        branch_name: str,
+        base_branch: str | None = None,
+    ) -> dict[str, Any]:
+        """Create and switch to a new local work branch from an existing local base branch."""
+        return runner.git_create_work_branch(
+            project_id=project_id,
+            branch_name=branch_name,
+            base_branch=base_branch,
+        )
+
+    @mcp.tool
     def run_verification(
         project_id: str,
         command_key: str,

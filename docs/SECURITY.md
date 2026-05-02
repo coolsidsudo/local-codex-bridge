@@ -1,6 +1,6 @@
 # Security notes
 
-This bridge can start local Codex against configured local repositories. That means it can indirectly modify files in any configured project. It can also perform a controlled Git acceptance commit/push after explicit human approval. Configure it conservatively.
+This bridge can start local Codex against configured local repositories. That means it can indirectly modify files in any configured project. It can also create a controlled local work branch and perform a controlled Git acceptance commit/push after explicit human approval. Configure it conservatively.
 
 Local Codex Bridge is project-agnostic: configured project roots are trust boundaries, and bridge behavior should not assume a particular downstream repository.
 
@@ -14,6 +14,7 @@ Local Codex Bridge is project-agnostic: configured project roots are trust bound
 - Keep verification commands allowlisted.
 - Do not add arbitrary shell execution unless you fully understand the risk.
 - Review staged/unstaged diffs, bounded untracked previews, and verification output before accepting changes.
+- Use `git_create_work_branch` only when the configured repo is clean and the intended base branch is clear.
 - Use `git_commit_and_push` only after explicit human approval of the exact files and commit message.
 - Keep secrets out of task prompts and logs.
 - Do not publish temporary tunnel URLs in public issues or documentation.
@@ -31,6 +32,21 @@ LCB auth configuration is first-class:
 For `oidc_proxy`, `server.public_base_url` must be the real HTTPS tunnel/domain without `/mcp`; ChatGPT uses `{public_base_url}/mcp`, and the IdP redirect URI is `{public_base_url}/auth/callback`. OIDC client ID and client secret must come from environment variables. `example.com` and `YOUR-...` values in docs are placeholders and do not exist.
 
 Public-style no-auth configurations fail closed at startup. Query-string tokens are not supported.
+
+## Controlled `git_create_work_branch`
+
+`git_create_work_branch` is a bridge-owned local Git operation for creating a new work branch before Codex edits begin.
+
+Safeguards:
+
+- It creates and switches to a new local branch only; it does not push, merge, delete branches, create PRs, or touch tags.
+- It refuses dirty worktrees based on `git status --porcelain=v1 --untracked-files=normal`.
+- It refuses detached HEAD.
+- If `base_branch` is omitted, it uses the current checked-out branch; no universal base such as `main` is hard-coded.
+- `base_branch` must be an existing local branch name. Remote-style bases such as `origin/main`, full refs such as `refs/heads/main`, and `HEAD` are refused.
+- The target branch must not already exist; switching existing branches is deferred.
+- Branch names must pass conservative Local Codex Bridge validation and `git check-ref-format --branch`.
+- Failures return structured `blocked_*` diagnostics with relevant git evidence.
 
 ## Controlled `git_commit_and_push`
 
@@ -78,4 +94,5 @@ ChatGPT-side developer MCP errors such as `FORBIDDEN: This conversation does not
 - No built-in Cloudflare Access validation.
 - No arbitrary shell tool.
 - No streaming live logs; polling is supported.
+- Branch creation is local-only and refuses dirty or detached state.
 - Remote selection for `git_commit_and_push` is currently constrained to `origin`.
