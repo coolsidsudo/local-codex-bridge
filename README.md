@@ -58,6 +58,7 @@ The tool surface is intentionally conservative:
 - `get_task` — read task metadata and stdout/stderr tails.
 - `list_tasks` — list recent bridge task records.
 - `abort_task` — terminate a running local Codex process.
+- `get_review_package` — return a compact read-only changed-file index with status/stat evidence, without full diffs or full file contents.
 - `get_git_diff` — inspect git status, unstaged/staged diffs, and bounded untracked file previews.
 - `git_get_branch_status` — report current branch, dirty state, HEAD, remotes, upstream, and ahead/behind evidence.
 - `git_create_work_branch` — create and switch to a new local work branch from an existing local base branch.
@@ -90,12 +91,12 @@ The intended acceptance workflow is:
 ```text
 ChatGPT plans/reviews
   -> local Codex CLI edits a configured repo
-  -> ChatGPT reviews diff and verification output
+  -> ChatGPT reviews the package index, targeted diffs, and verification output
   -> human accepts
   -> Local Codex Bridge performs controlled git add/commit/push
 ```
 
-`git_commit_and_push` should only be called after the human has reviewed the exact diff and verification evidence from `get_git_diff` and `run_verification`. `get_git_diff` distinguishes unstaged and staged changes and includes bounded text previews for untracked files when safe. Its safeguards include:
+`git_commit_and_push` should only be called after the human has reviewed the exact diff and verification evidence from `get_git_diff` and `run_verification`. For a first-pass review index, `get_review_package` reports branch/HEAD/remotes, status/stat evidence, changed-file classifications, and bounded untracked preview metadata without returning full diffs or full file contents. `get_git_diff` distinguishes unstaged and staged changes and includes bounded text previews for untracked files when safe. Its safeguards include:
 
 - Only configured project roots are accessible.
 - No arbitrary shell execution is exposed.
@@ -424,11 +425,14 @@ start_codex_task
 get_task
 list_tasks
 abort_task
+get_review_package
 get_git_diff
 git_get_branch_status
 git_create_work_branch
 run_verification
 git_commit_and_push
+github_create_pr
+github_get_pr_status
 ```
 
 ChatGPT-side developer MCP errors such as `FORBIDDEN: This conversation does not support developer MCPs` are platform/conversation gating. Local Codex Bridge cannot guarantee that bridge-code changes will enable developer MCPs for a gated ChatGPT conversation.

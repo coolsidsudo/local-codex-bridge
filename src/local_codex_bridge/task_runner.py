@@ -18,6 +18,8 @@ UNTRACKED_LIST_MAX_FILES = 200
 UNTRACKED_PREVIEW_MAX_FILES = 20
 UNTRACKED_PREVIEW_MAX_BYTES_PER_FILE = 4096
 UNTRACKED_PREVIEW_MAX_TOTAL_CHARS = 12000
+REVIEW_PACKAGE_VERSION = 1
+REVIEW_PACKAGE_UNTRACKED_EXCERPT_MAX_CHARS = 1000
 BRANCH_NAME_MAX_CHARS = 200
 BRANCH_NAME_ALLOWED_RE = re.compile(r"^[A-Za-z0-9._/-]+$")
 COMMAND_ARG_MAX_CHARS = 300
@@ -265,6 +267,172 @@ class TaskRunner:
             }
 
         return {"status": "ok", **evidence}
+
+    def get_review_package(self, project_id: str, max_chars: int = 20000) -> dict[str, Any]:
+        if not isinstance(max_chars, int) or max_chars < 0:
+            return {"status": "blocked_input", "error": "max_chars must be a non-negative integer"}
+
+        project = self._project(project_id)
+        repo = project.path
+
+        short_status = self._run(repo, ["git", "status", "--short", "--branch"], timeout=20)
+        porcelain_status_raw = self._git_z_full(
+            repo,
+            ["git", "status", "--porcelain=v1", "-z", "--untracked-files=normal"],
+            timeout=20,
+        )
+        current_branch_result = self._current_branch(repo)
+        current_branch = current_branch_result.get("stdout", "").strip()
+        head = self._run(repo, ["git", "rev-parse", "--verify", "HEAD"], timeout=20)
+        remotes = self._sanitize_command_result(
+            self._run(repo, ["git", "remote", "-v"], timeout=20)
+        )
+        upstream_info = self._upstream_info(repo)
+
+        unstaged_stat = self._run(repo, ["git", "diff", "--stat"], timeout=20)
+        staged_stat = self._run(repo, ["git", "diff", "--cached", "--stat"], timeout=20)
+        unstaged_name_status_raw = self._git_z_full(
+            repo,
+            ["git", "diff", "--name-status", "-z", "--diff-filter=ACDMRTUXB"],
+            timeout=20,
+        )
+        staged_name_status_raw = self._git_z_full(
+            repo,
+            ["git", "diff", "--cached", "--name-status", "-z", "--diff-filter=ACDMRTUXB"],
+            timeout=20,
+        )
+        unstaged_numstat_raw = self._git_z_full(
+            repo,
+            ["git", "diff", "--numstat", "-z"],
+            timeout=20,
+        )
+        staged_numstat_raw = self._git_z_full(
+            repo,
+            ["git", "diff", "--cached", "--numstat", "-z"],
+            timeout=20,
+        )
+        staged_files = self._staged_files(repo)
+        untracked_files = self._untracked_files(repo)
+
+        evidence = {
+            "short_status": short_status,
+            "porcelain_status_z": porcelain_status_raw["evidence"],
+            "current_branch_result": current_branch_result,
+            "head": head,
+            "remotes": remotes,
+            "upstream_result": upstream_info["upstream_result"],
+            "ahead_behind_result": upstream_info["ahead_behind_result"],
+            "unstaged_name_status": unstaged_name_status_raw["evidence"],
+            "staged_name_status": staged_name_status_raw["evidence"],
+            "unstaged_numstat": unstaged_numstat_raw["evidence"],
+            "staged_numstat": staged_numstat_raw["evidence"],
+        }
+
+        for key in [
+            "short_status",
+            "porcelain_status_z",
+            "current_branch_result",
+            "head",
+            "unstaged_stat",
+            "staged_stat",
+            "unstaged_name_status",
+            "staged_name_status",
+            "unstaged_numstat",
+            "staged_numstat",
+            "untracked_files",
+        ]:
+            result = {
+                "unstaged_stat": unstaged_stat,
+                "staged_stat": staged_stat,
+                "untracked_files": untracked_files,
+                **evidence,
+            }[key]
+            if result["returncode"] != 0:
+                return {
+                    "status": "blocked_git",
+                    "error": f"git command failed while collecting {key}",
+                    "project_id": project_id,
+                    "path": str(repo),
+                    "evidence": evidence,
+                }
+
+        if upstream_info.get("upstream") and upstream_info["ahead_behind_result"]["returncode"] != 0:
+            return {
+                "status": "blocked_git",
+                "error": "git command failed while collecting upstream ahead/behind",
+                "project_id": project_id,
+                "path": str(repo),
+                "evidence": evidence,
+                }
+
+        staged_records = self._parse_name_status_z(staged_name_status_raw["stdout"])
+        unstaged_records = self._parse_name_status_z(unstaged_name_status_raw["stdout"])
+        staged_numstats = self._parse_numstat_z(staged_numstat_raw["stdout"])
+        unstaged_numstats = self._parse_numstat_z(unstaged_numstat_raw["stdout"])
+        porcelain_records = self._parse_porcelain_status_z(porcelain_status_raw["stdout"])
+        files, untracked_previews = self._changed_file_table(
+            repo=repo,
+            staged_records=staged_records,
+            unstaged_records=unstaged_records,
+            staged_numstats=staged_numstats,
+            unstaged_numstats=unstaged_numstats,
+            porcelain_records=porcelain_records,
+            untracked_files=untracked_files["files"],
+        )
+
+        summary = {
+            "changed_file_count": len(files),
+            "staged_count": sum(1 for item in files if item["staged"]),
+            "unstaged_count": sum(1 for item in files if item["unstaged"]),
+            "untracked_count": sum(1 for item in files if item["untracked"]),
+            "binary_count": sum(1 for item in files if item["binary_text_status"] == "binary"),
+            "likely_needs_targeted_review_count": sum(
+                1 for item in files if item["likely_needs_targeted_review"]
+            ),
+        }
+        staged_file_list = staged_files.get("files", [])
+        unstaged_file_list = sorted({record["path"] for record in unstaged_records})
+
+        package = {
+            "status": "ok",
+            "project_id": project_id,
+            "name": project.name,
+            "path": str(repo),
+            "package_version": REVIEW_PACKAGE_VERSION,
+            "limits": {
+                "max_chars": max_chars,
+                "full_diffs_included": False,
+                "full_file_contents_included": False,
+            },
+            "repo": {
+                "current_branch": current_branch or None,
+                "detached": current_branch_result["returncode"] != 0 or not current_branch,
+                "dirty": bool(porcelain_records),
+                "head": head["stdout"].strip() if head["returncode"] == 0 else None,
+                "remotes": remotes,
+                "upstream": upstream_info["upstream"],
+                "ahead_behind": upstream_info["ahead_behind"],
+            },
+            "evidence": evidence,
+            "summary": summary,
+            "files": files,
+            "staged_files": staged_file_list,
+            "unstaged_files": unstaged_file_list,
+            "untracked_files": untracked_files,
+            "diff_stats": {
+                "unstaged": unstaged_stat,
+                "staged": staged_stat,
+            },
+            "untracked_previews": untracked_previews,
+            "truncation": {
+                "truncated": False,
+                "omitted_file_count": 0,
+                "omitted_preview_count": 0,
+                "omitted_sections": [],
+            },
+            "suggested_next_inspection_calls": self._suggested_next_inspection_calls(files),
+        }
+        return self._truncate_review_package(package, max_chars=max_chars)
 
     def git_create_work_branch(
         self,
@@ -1351,6 +1519,444 @@ class TaskRunner:
             result["files"] = []
         return result
 
+    def _parse_name_status_z(self, output: str) -> list[dict[str, Any]]:
+        records: list[dict[str, Any]] = []
+        tokens = [token for token in output.split("\0") if token]
+        index = 0
+        while index < len(tokens):
+            status_token = tokens[index]
+            index += 1
+            tab_parts = status_token.split("\t")
+            status = tab_parts[0]
+            code = status[:1] if status else "?"
+
+            old_path = None
+            if code in {"R", "C"}:
+                if len(tab_parts) >= 3:
+                    old_path = tab_parts[1]
+                    path = tab_parts[2]
+                elif index + 1 < len(tokens):
+                    old_path = tokens[index]
+                    path = tokens[index + 1]
+                    index += 2
+                else:
+                    path = ""
+            elif len(tab_parts) >= 2:
+                path = tab_parts[1]
+            elif index < len(tokens):
+                path = tokens[index]
+                index += 1
+            else:
+                path = ""
+
+            if path:
+                records.append(
+                    {
+                        "status": status,
+                        "code": code,
+                        "path": path,
+                        "old_path": old_path,
+                    }
+                )
+        return records
+
+    def _parse_numstat_z(self, output: str) -> dict[str, dict[str, Any]]:
+        stats: dict[str, dict[str, Any]] = {}
+        tokens = [token for token in output.split("\0") if token]
+        index = 0
+        while index < len(tokens):
+            token = tokens[index]
+            index += 1
+            parts = token.split("\t")
+            if len(parts) < 3:
+                continue
+
+            added_raw, deleted_raw, path = parts[0], parts[1], parts[2]
+            old_path = None
+            if path == "" and index + 1 < len(tokens):
+                old_path = tokens[index]
+                path = tokens[index + 1]
+                index += 2
+            if not path:
+                continue
+
+            binary = added_raw == "-" and deleted_raw == "-"
+            added: int | None = None
+            deleted: int | None = None
+            if not binary:
+                try:
+                    added = int(added_raw)
+                    deleted = int(deleted_raw)
+                except ValueError:
+                    added = None
+                    deleted = None
+
+            stats[path] = {
+                "path": path,
+                "old_path": old_path,
+                "binary": binary,
+                "added_lines": added,
+                "deleted_lines": deleted,
+            }
+        return stats
+
+    def _parse_porcelain_status_z(self, output: str) -> list[dict[str, Any]]:
+        records: list[dict[str, Any]] = []
+        tokens = [token for token in output.split("\0") if token]
+        index = 0
+        while index < len(tokens):
+            token = tokens[index]
+            index += 1
+            if len(token) < 3:
+                continue
+            x_status = token[0]
+            y_status = token[1]
+            path = token[3:] if token[2] == " " else token[2:]
+            old_path = None
+            if x_status in {"R", "C"} or y_status in {"R", "C"}:
+                if index < len(tokens):
+                    old_path = tokens[index]
+                    index += 1
+            if path:
+                records.append(
+                    {
+                        "path": path,
+                        "old_path": old_path,
+                        "index_status": x_status,
+                        "worktree_status": y_status,
+                    }
+                )
+        return records
+
+    def _changed_file_table(
+        self,
+        *,
+        repo: Path,
+        staged_records: list[dict[str, Any]],
+        unstaged_records: list[dict[str, Any]],
+        staged_numstats: dict[str, dict[str, Any]],
+        unstaged_numstats: dict[str, dict[str, Any]],
+        porcelain_records: list[dict[str, Any]],
+        untracked_files: list[str],
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        files_by_path: dict[str, dict[str, Any]] = {}
+
+        def item_for(path: str) -> dict[str, Any]:
+            if path not in files_by_path:
+                files_by_path[path] = {
+                    "path": path,
+                    "old_path": None,
+                    "staged_codes": [],
+                    "unstaged_codes": [],
+                    "untracked": False,
+                    "numstats": [],
+                    "reason_codes": [],
+                }
+            return files_by_path[path]
+
+        for record in staged_records:
+            item = item_for(record["path"])
+            item["staged_codes"].append(record["code"])
+            item["old_path"] = item["old_path"] or record.get("old_path")
+
+        for record in unstaged_records:
+            item = item_for(record["path"])
+            item["unstaged_codes"].append(record["code"])
+            item["old_path"] = item["old_path"] or record.get("old_path")
+
+        for path in untracked_files:
+            item = item_for(path)
+            item["untracked"] = True
+
+        for record in porcelain_records:
+            item = item_for(record["path"])
+            item["old_path"] = item["old_path"] or record.get("old_path")
+            if record["index_status"] not in {" ", "?"}:
+                code = record["index_status"]
+                if code not in item["staged_codes"]:
+                    item["staged_codes"].append(code)
+            if record["worktree_status"] not in {" ", "?"}:
+                code = record["worktree_status"]
+                if code not in item["unstaged_codes"]:
+                    item["unstaged_codes"].append(code)
+            if record["index_status"] == "?" and record["worktree_status"] == "?":
+                item["untracked"] = True
+
+        for stats in [staged_numstats, unstaged_numstats]:
+            for path, numstat in stats.items():
+                item_for(path)["numstats"].append(numstat)
+
+        preview_items: list[dict[str, Any]] = []
+        omitted_preview_count = 0
+        untracked_preview_count = 0
+        changed_files: list[dict[str, Any]] = []
+
+        for path in sorted(files_by_path):
+            raw = files_by_path[path]
+            staged = bool(raw["staged_codes"])
+            unstaged = bool(raw["unstaged_codes"])
+            untracked = bool(raw["untracked"])
+            reason_codes: list[str] = []
+            reason_codes.extend(f"staged_{code}" for code in raw["staged_codes"])
+            reason_codes.extend(f"unstaged_{code}" for code in raw["unstaged_codes"])
+            if staged and unstaged:
+                reason_codes.append("mixed_staged_unstaged")
+            if untracked:
+                reason_codes.append("untracked")
+
+            change_type = self._review_change_type(
+                staged_codes=raw["staged_codes"],
+                unstaged_codes=raw["unstaged_codes"],
+                untracked=untracked,
+            )
+            binary_text_status = self._binary_text_status(raw["numstats"])
+
+            preview_summary: dict[str, Any] | None = None
+            safe_preview_available = False
+            if untracked:
+                if untracked_preview_count < UNTRACKED_PREVIEW_MAX_FILES:
+                    preview_summary = self._safe_untracked_preview_summary(repo, path)
+                    untracked_preview_count += 1
+                else:
+                    preview_summary = {
+                        "path": path,
+                        "status": "skipped",
+                        "reason": "preview_limit",
+                        "safe_preview_available": False,
+                        "binary_text_status": "unknown",
+                        "excerpt_included": False,
+                    }
+                    omitted_preview_count += 1
+                preview_items.append(preview_summary)
+                safe_preview_available = preview_summary["safe_preview_available"]
+                if preview_summary["status"] == "skipped":
+                    reason_codes.append(f"untracked_preview_{preview_summary['reason']}")
+                if preview_summary["binary_text_status"] != "unknown":
+                    binary_text_status = preview_summary["binary_text_status"]
+
+            binary = binary_text_status == "binary"
+            diff_available = (
+                (untracked and safe_preview_available)
+                or (not untracked and binary_text_status == "text" and (staged or unstaged))
+            )
+            suggested_diff_source = self._suggested_diff_source(
+                staged=staged,
+                unstaged=unstaged,
+                untracked=untracked,
+                diff_available=diff_available,
+            )
+            likely_needs_targeted_review = diff_available or binary or change_type in {
+                "renamed",
+                "copied",
+                "deleted",
+                "unknown",
+            } or (staged and unstaged)
+
+            if diff_available:
+                reason_codes.append("targeted_diff_available")
+            if binary:
+                reason_codes.append("binary")
+            if likely_needs_targeted_review:
+                reason_codes.append("likely_needs_targeted_review")
+
+            entry = {
+                "path": path,
+                "change_type": change_type,
+                "staged": staged,
+                "unstaged": unstaged,
+                "untracked": untracked,
+                "binary_text_status": binary_text_status,
+                "safe_preview_available": safe_preview_available,
+                "diff_available": diff_available,
+                "suggested_diff_source": suggested_diff_source,
+                "likely_needs_targeted_review": likely_needs_targeted_review,
+                "reason_codes": sorted(set(reason_codes)),
+            }
+            if raw["old_path"]:
+                entry["old_path"] = raw["old_path"]
+            changed_files.append(entry)
+
+        untracked_previews = {
+            "items": preview_items,
+            "truncated": omitted_preview_count > 0,
+            "omitted_count": omitted_preview_count,
+            "policy": "full file contents are never included; excerpts are partial and bounded",
+            "limits": {
+                "max_files": UNTRACKED_PREVIEW_MAX_FILES,
+                "max_excerpt_chars": REVIEW_PACKAGE_UNTRACKED_EXCERPT_MAX_CHARS,
+                "max_bytes_per_file": UNTRACKED_PREVIEW_MAX_BYTES_PER_FILE,
+            },
+        }
+        return changed_files, untracked_previews
+
+    def _review_change_type(
+        self,
+        *,
+        staged_codes: list[str],
+        unstaged_codes: list[str],
+        untracked: bool,
+    ) -> str:
+        if untracked:
+            return "untracked"
+        codes = staged_codes + unstaged_codes
+        if any(code == "R" for code in codes):
+            return "renamed"
+        if any(code == "C" for code in codes):
+            return "copied"
+        if any(code == "T" for code in codes):
+            return "type_changed"
+        if codes and all(code == "D" for code in codes):
+            return "deleted"
+        if any(code == "A" for code in codes):
+            return "added"
+        if any(code == "M" for code in codes):
+            return "modified"
+        if any(code == "D" for code in codes):
+            return "deleted"
+        return "unknown"
+
+    def _binary_text_status(self, numstats: list[dict[str, Any]]) -> str:
+        if any(item["binary"] for item in numstats):
+            return "binary"
+        if any(item["added_lines"] is not None and item["deleted_lines"] is not None for item in numstats):
+            return "text"
+        return "unknown"
+
+    def _suggested_diff_source(
+        self,
+        *,
+        staged: bool,
+        unstaged: bool,
+        untracked: bool,
+        diff_available: bool,
+    ) -> str:
+        if not diff_available:
+            return "none"
+        if untracked:
+            return "untracked"
+        if staged and unstaged:
+            return "auto"
+        if staged:
+            return "staged"
+        if unstaged:
+            return "unstaged"
+        return "none"
+
+    def _safe_untracked_preview_summary(self, repo: Path, path: str) -> dict[str, Any]:
+        base = {
+            "path": path,
+            "safe_preview_available": False,
+            "binary_text_status": "unknown",
+            "excerpt_included": False,
+        }
+        candidate_result = self._untracked_preview_candidate(repo, path)
+        if candidate_result["status"] != "ok":
+            return {
+                **base,
+                "status": "skipped",
+                "reason": candidate_result["reason"],
+            }
+
+        preview = self._read_untracked_preview(candidate_result["path"])
+        if preview["status"] != "included":
+            binary_text_status = "binary" if preview["reason"] == "binary" else "unknown"
+            return {
+                **base,
+                "status": "skipped",
+                "reason": preview["reason"],
+                "binary_text_status": binary_text_status,
+            }
+
+        result = {
+            **base,
+            "status": "available",
+            "safe_preview_available": True,
+            "binary_text_status": "text",
+            "bytes_read": preview["bytes_read"],
+            "preview_truncated": preview["truncated"],
+            "full_content_omitted": True,
+        }
+        if preview["truncated"]:
+            excerpt = preview["text"][:REVIEW_PACKAGE_UNTRACKED_EXCERPT_MAX_CHARS]
+            result.update(
+                {
+                    "excerpt_included": True,
+                    "excerpt": excerpt,
+                    "excerpt_chars": len(excerpt),
+                    "excerpt_is_partial": True,
+                }
+            )
+        else:
+            result["reason"] = "safe_short_file_full_content_omitted"
+        return result
+
+    def _suggested_next_inspection_calls(self, files: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        calls = []
+        for item in files:
+            if not item["diff_available"]:
+                continue
+            calls.append(
+                {
+                    "tool": "get_changed_file_diff",
+                    "project_id": "<same project_id>",
+                    "path": item["path"],
+                    "source": item["suggested_diff_source"],
+                    "reason_codes": item["reason_codes"],
+                    "available_in": "future_A2",
+                }
+            )
+        return calls
+
+    def _truncate_review_package(self, package: dict[str, Any], max_chars: int) -> dict[str, Any]:
+        def json_size() -> int:
+            return len(json.dumps(package, ensure_ascii=False, sort_keys=True))
+
+        if json_size() <= max_chars:
+            return package
+
+        truncation = package["truncation"]
+        truncation["truncated"] = True
+
+        for item in package["untracked_previews"]["items"]:
+            if "excerpt" in item and json_size() > max_chars:
+                item.pop("excerpt")
+                item["excerpt_omitted_reason"] = "review_package_truncation"
+                item["excerpt_included"] = False
+                truncation["omitted_preview_count"] += 1
+        if truncation["omitted_preview_count"]:
+            truncation["omitted_sections"].append("untracked_preview_excerpts")
+
+        for section in ["suggested_next_inspection_calls", "staged_files", "unstaged_files"]:
+            values = package.get(section)
+            if isinstance(values, list) and values and json_size() > max_chars:
+                package[section] = []
+                truncation["omitted_sections"].append(section)
+
+        untracked_file_list = package.get("untracked_files", {}).get("files")
+        if isinstance(untracked_file_list, list):
+            while untracked_file_list and json_size() > max_chars:
+                untracked_file_list.pop()
+                package["untracked_files"]["truncated"] = True
+                package["untracked_files"]["omitted_count"] += 1
+            if package["untracked_files"].get("omitted_count"):
+                truncation["omitted_sections"].append("untracked_files.files")
+
+        files = package["files"]
+        while files and json_size() > max_chars:
+            files.pop()
+            truncation["omitted_file_count"] += 1
+        if truncation["omitted_file_count"]:
+            truncation["omitted_sections"].append("files")
+
+        if json_size() > max_chars:
+            for key, value in package["evidence"].items():
+                if isinstance(value, dict) and value.get("stdout") and json_size() > max_chars:
+                    value["stdout"] = ""
+                    value["stdout_omitted_reason"] = "review_package_truncation"
+                    truncation["omitted_sections"].append(f"evidence.{key}.stdout")
+
+        return package
+
     def _untracked_files(self, repo: Path) -> dict[str, Any]:
         cmd = ["git", "ls-files", "--others", "--exclude-standard", "-z"]
         proc = subprocess.run(
@@ -1563,6 +2169,77 @@ class TaskRunner:
             return ""
         data = path.read_text(encoding="utf-8", errors="replace")
         return data[-max_chars:]
+
+    def _git_z(self, cwd: Path, cmd: list[str], timeout: int, max_chars: int = 20000) -> dict[str, Any]:
+        max_chars = max(0, max_chars)
+        try:
+            proc = subprocess.run(
+                cmd,
+                cwd=str(cwd),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=timeout,
+                shell=False,
+            )
+        except FileNotFoundError as exc:
+            return {
+                "cmd": cmd,
+                "returncode": 127,
+                "stdout": "",
+                "stderr": str(exc),
+            }
+        stdout = proc.stdout.decode("utf-8", errors="replace")
+        stderr = proc.stderr.decode("utf-8", errors="replace")
+        return {
+            "cmd": cmd,
+            "returncode": proc.returncode,
+            "stdout": stdout[-max_chars:] if max_chars else "",
+            "stderr": stderr[-max_chars:] if max_chars else "",
+        }
+
+    def _git_z_full(
+        self,
+        cwd: Path,
+        cmd: list[str],
+        timeout: int,
+        evidence_max_chars: int = 20000,
+    ) -> dict[str, Any]:
+        evidence_max_chars = max(0, evidence_max_chars)
+        try:
+            proc = subprocess.run(
+                cmd,
+                cwd=str(cwd),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=timeout,
+                shell=False,
+            )
+        except FileNotFoundError as exc:
+            evidence = {
+                "cmd": cmd,
+                "returncode": 127,
+                "stdout": "",
+                "stderr": str(exc),
+                "stdout_truncated": False,
+            }
+            return {"stdout": "", "stderr": str(exc), "returncode": 127, "evidence": evidence}
+
+        stdout = proc.stdout.decode("utf-8", errors="replace")
+        stderr = proc.stderr.decode("utf-8", errors="replace")
+        bounded_stdout = stdout[-evidence_max_chars:] if evidence_max_chars else ""
+        evidence = {
+            "cmd": cmd,
+            "returncode": proc.returncode,
+            "stdout": bounded_stdout,
+            "stderr": stderr[-evidence_max_chars:] if evidence_max_chars else "",
+            "stdout_truncated": len(stdout) > len(bounded_stdout),
+        }
+        return {
+            "stdout": stdout,
+            "stderr": stderr,
+            "returncode": proc.returncode,
+            "evidence": evidence,
+        }
 
     def _run(
         self,

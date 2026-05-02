@@ -13,6 +13,7 @@ Local Codex Bridge is project-agnostic: configured project roots are trust bound
 - Configure only the repositories you are willing to let ChatGPT/Codex work on.
 - Keep verification commands allowlisted.
 - Do not add arbitrary shell execution unless you fully understand the risk.
+- Use `get_review_package` for a compact read-only changed-file index before requesting targeted diffs.
 - Review staged/unstaged diffs, bounded untracked previews, and verification output before accepting changes.
 - Use `git_create_work_branch` only when the configured repo is clean and the intended base branch is clear.
 - Use `git_commit_and_push` only after explicit human approval of the exact files and commit message.
@@ -56,10 +57,12 @@ Safeguards:
 ```text
 ChatGPT plans/reviews
   -> local Codex CLI edits a configured repo
-  -> ChatGPT reviews staged/unstaged diffs, bounded untracked previews, and verification output
+  -> ChatGPT reviews package index, staged/unstaged diffs, bounded untracked previews, and verification output
   -> human approves
   -> bridge performs controlled git add/commit/push
 ```
+
+`get_review_package` is read-only. It uses fixed git status/name-status/stat/numstat commands and existing safe untracked preview checks to report a changed-file index without full diffs or full file contents. It does not run verification commands, mutate branches, stage files, commit, push, create PRs, or touch tags/releases.
 
 Safeguards:
 
