@@ -72,6 +72,11 @@ def build_mcp(config: str | Path | BridgeConfig) -> FastMCP:
         return runner.git_diff(project_id, max_chars=max_chars)
 
     @mcp.tool
+    def get_review_package(project_id: str, max_chars: int = 20000) -> dict[str, Any]:
+        """Return a compact read-only review index without full diffs or file contents."""
+        return runner.get_review_package(project_id, max_chars=max_chars)
+
+    @mcp.tool
     def git_get_branch_status(project_id: str) -> dict[str, Any]:
         """Return current branch, dirty, upstream, ahead/behind, HEAD, and remote evidence."""
         return runner.git_get_branch_status(project_id)

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- `get_review_package` MCP tool for a compact read-only changed-file review index without full diffs or full file contents.
+
 ## [0.2.0] - 2026-05-02
 
 ### Added
