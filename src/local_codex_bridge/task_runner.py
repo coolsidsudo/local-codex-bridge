@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import posixpath
 import re
 import signal
 import subprocess
@@ -433,6 +434,143 @@ class TaskRunner:
             "suggested_next_inspection_calls": self._suggested_next_inspection_calls(files),
         }
         return self._truncate_review_package(package, max_chars=max_chars)
+
+    def get_changed_file_diff(
+        self,
+        project_id: str,
+        path: str,
+        source: str = "auto",
+        max_chars: int = 30000,
+    ) -> dict[str, Any]:
+        if not isinstance(max_chars, int) or max_chars < 0:
+            return {"status": "blocked_input", "error": "max_chars must be a non-negative integer"}
+
+        source_result = self._validate_changed_file_diff_source(source)
+        if source_result["status"] != "ok":
+            return source_result
+        source_requested = source_result["source"]
+
+        project = self._project(project_id)
+        repo = project.path
+        path_result = self._normalize_changed_file_diff_path(repo, path)
+        if path_result["status"] != "ok":
+            return path_result
+        normalized_path = path_result["path"]
+
+        state = self._target_changed_file_state(repo, normalized_path)
+        if state["status"] != "ok":
+            return {
+                "status": "blocked_git",
+                "error": state["error"],
+                "project_id": project_id,
+                "name": project.name,
+                "path": str(repo),
+                "requested_path": path,
+                "normalized_path": normalized_path,
+                "source_requested": source_requested,
+                "evidence": state["evidence"],
+            }
+
+        safety = self._targeted_path_safety(repo, normalized_path, state)
+        if safety["status"] != "ok":
+            return {
+                "status": "blocked_unsafe",
+                "reason": safety["reason"],
+                "project_id": project_id,
+                "name": project.name,
+                "path": str(repo),
+                "requested_path": path,
+                "normalized_path": normalized_path,
+                "source_requested": source_requested,
+                "evidence": state["evidence"],
+            }
+
+        resolution = self._resolve_changed_file_diff_source(state, source_requested)
+        if resolution["status"] != "ok":
+            return {
+                **resolution,
+                "project_id": project_id,
+                "name": project.name,
+                "path": str(repo),
+                "requested_path": path,
+                "normalized_path": normalized_path,
+                "source_requested": source_requested,
+                "file": state["file"],
+                "evidence": state["evidence"],
+            }
+        source_resolved = resolution["source"]
+
+        diff_safety = self._targeted_diff_safety_check(repo, normalized_path, source_resolved, state)
+        if diff_safety["status"] != "ok":
+            return {
+                "status": "blocked_unsafe",
+                "reason": diff_safety["reason"],
+                "project_id": project_id,
+                "name": project.name,
+                "path": str(repo),
+                "requested_path": path,
+                "normalized_path": normalized_path,
+                "source_requested": source_requested,
+                "source_resolved": source_resolved,
+                "file": state["file"],
+                "evidence": state["evidence"],
+                "summary": diff_safety.get("summary"),
+            }
+
+        diff = self._run_targeted_changed_file_diff(
+            repo,
+            normalized_path,
+            source_resolved,
+            max_chars=max_chars,
+        )
+        if source_resolved == "untracked" and diff["returncode"] in {0, 1}:
+            diff_status = "ok"
+        elif source_resolved != "untracked" and diff["returncode"] == 0:
+            diff_status = "ok"
+        else:
+            diff_status = "blocked_git"
+
+        if diff_status != "ok":
+            return {
+                "status": "blocked_git",
+                "error": "targeted git diff command failed",
+                "project_id": project_id,
+                "name": project.name,
+                "path": str(repo),
+                "requested_path": path,
+                "normalized_path": normalized_path,
+                "source_requested": source_requested,
+                "source_resolved": source_resolved,
+                "file": state["file"],
+                "diff": diff,
+                "evidence": state["evidence"],
+            }
+
+        return {
+            "status": "ok",
+            "project_id": project_id,
+            "name": project.name,
+            "path": str(repo),
+            "requested_path": path,
+            "normalized_path": normalized_path,
+            "source_requested": source_requested,
+            "source_resolved": source_resolved,
+            "file": state["file"],
+            "diff": diff,
+            "evidence": state["evidence"],
+            "limits": {
+                "max_chars": max_chars,
+                "targeted_path_only": True,
+                "full_repo_diff_included": False,
+                "verification_executed": False,
+            },
+            "truncation": {
+                "truncated": diff["stdout_truncated"],
+                "stdout_chars": len(diff["stdout"]),
+                "max_chars": max_chars,
+                "omitted_chars": diff["stdout_omitted_chars"],
+            },
+        }
 
     def git_create_work_branch(
         self,
@@ -1628,6 +1766,283 @@ class TaskRunner:
                 )
         return records
 
+    def _validate_changed_file_diff_source(self, source: str) -> dict[str, Any]:
+        if not isinstance(source, str):
+            return {"status": "blocked_input", "error": "source must be a string"}
+        allowed = {"auto", "unstaged", "staged", "untracked"}
+        if source not in allowed:
+            return {
+                "status": "blocked_input",
+                "error": "source must be one of auto, unstaged, staged, untracked",
+                "allowed_sources": sorted(allowed),
+            }
+        return {"status": "ok", "source": source}
+
+    def _normalize_changed_file_diff_path(self, repo: Path, path: str) -> dict[str, Any]:
+        if not isinstance(path, str):
+            return {"status": "blocked_input", "error": "path must be a string"}
+        if not path.strip():
+            return {"status": "blocked_input", "error": "path must not be empty"}
+        if path != path.strip():
+            return {"status": "blocked_input", "error": "path must not have surrounding whitespace"}
+
+        raw_path = Path(path)
+        if raw_path.is_absolute():
+            return {"status": "blocked_input", "error": "path must be repo-relative"}
+        normalized = posixpath.normpath(path.replace("\\", "/"))
+        if normalized in {"", "."}:
+            return {"status": "blocked_input", "error": "path must target one file, not the repo root"}
+        if normalized == ".." or normalized.startswith("../"):
+            return {"status": "blocked_input", "error": "path must stay inside the repo"}
+
+        repo_resolved = repo.resolve()
+        candidate = repo / normalized
+        resolved_parent = candidate.parent.resolve(strict=False)
+        try:
+            resolved_parent.relative_to(repo_resolved)
+        except ValueError:
+            return {"status": "blocked_input", "error": "path must stay inside the repo"}
+        return {"status": "ok", "path": normalized}
+
+    def _target_changed_file_state(self, repo: Path, path: str) -> dict[str, Any]:
+        porcelain_status_raw = self._git_z_full(
+            repo,
+            ["git", "status", "--porcelain=v1", "-z", "--untracked-files=normal", "--", path],
+            timeout=20,
+        )
+        unstaged_name_status_raw = self._git_z_full(
+            repo,
+            ["git", "diff", "--name-status", "-z", "--diff-filter=ACDMRTUXB", "--", path],
+            timeout=20,
+        )
+        staged_name_status_raw = self._git_z_full(
+            repo,
+            ["git", "diff", "--cached", "--name-status", "-z", "--diff-filter=ACDMRTUXB", "--", path],
+            timeout=20,
+        )
+        unstaged_numstat_raw = self._git_z_full(
+            repo,
+            ["git", "diff", "--numstat", "-z", "--", path],
+            timeout=20,
+        )
+        staged_numstat_raw = self._git_z_full(
+            repo,
+            ["git", "diff", "--cached", "--numstat", "-z", "--", path],
+            timeout=20,
+        )
+        unstaged_raw = self._git_z_full(
+            repo,
+            ["git", "diff", "--raw", "-z", "--", path],
+            timeout=20,
+        )
+        staged_raw = self._git_z_full(
+            repo,
+            ["git", "diff", "--cached", "--raw", "-z", "--", path],
+            timeout=20,
+        )
+        untracked_raw = self._git_z_full(
+            repo,
+            ["git", "ls-files", "--others", "--exclude-standard", "-z", "--", path],
+            timeout=20,
+        )
+
+        evidence = {
+            "porcelain_status_z": porcelain_status_raw["evidence"],
+            "unstaged_name_status": unstaged_name_status_raw["evidence"],
+            "staged_name_status": staged_name_status_raw["evidence"],
+            "unstaged_numstat": unstaged_numstat_raw["evidence"],
+            "staged_numstat": staged_numstat_raw["evidence"],
+            "unstaged_raw": unstaged_raw["evidence"],
+            "staged_raw": staged_raw["evidence"],
+            "untracked_files": untracked_raw["evidence"],
+        }
+        raw_results = {
+            "porcelain_status_z": porcelain_status_raw,
+            "unstaged_name_status": unstaged_name_status_raw,
+            "staged_name_status": staged_name_status_raw,
+            "unstaged_numstat": unstaged_numstat_raw,
+            "staged_numstat": staged_numstat_raw,
+            "unstaged_raw": unstaged_raw,
+            "staged_raw": staged_raw,
+            "untracked_files": untracked_raw,
+        }
+        for key, result in raw_results.items():
+            if result["returncode"] != 0:
+                return {
+                    "status": "blocked_git",
+                    "error": f"git command failed while collecting {key}",
+                    "evidence": evidence,
+                }
+
+        staged_records = [
+            record
+            for record in self._parse_name_status_z(staged_name_status_raw["stdout"])
+            if record["path"] == path
+        ]
+        unstaged_records = [
+            record
+            for record in self._parse_name_status_z(unstaged_name_status_raw["stdout"])
+            if record["path"] == path
+        ]
+        untracked_files = [
+            item for item in untracked_raw["stdout"].split("\0") if item and item == path
+        ]
+        staged_numstats = self._parse_numstat_z(staged_numstat_raw["stdout"])
+        unstaged_numstats = self._parse_numstat_z(unstaged_numstat_raw["stdout"])
+        staged_numstat = staged_numstats.get(path)
+        unstaged_numstat = unstaged_numstats.get(path)
+        numstats = [item for item in [staged_numstat, unstaged_numstat] if item]
+
+        staged_codes = [record["code"] for record in staged_records]
+        unstaged_codes = [record["code"] for record in unstaged_records]
+        untracked = bool(untracked_files)
+        old_path = next((record.get("old_path") for record in staged_records if record.get("old_path")), None)
+        if not old_path:
+            old_path = next(
+                (record.get("old_path") for record in unstaged_records if record.get("old_path")),
+                None,
+            )
+
+        binary_text_status = self._binary_text_status(numstats)
+        if untracked:
+            preview = self._safe_untracked_preview_summary(repo, path)
+            binary_text_status = preview["binary_text_status"]
+        staged = bool(staged_records)
+        unstaged = bool(unstaged_records)
+        change_type = self._review_change_type(
+            staged_codes=staged_codes,
+            unstaged_codes=unstaged_codes,
+            untracked=untracked,
+        )
+        file_item = {
+            "path": path,
+            "change_type": change_type,
+            "staged": staged,
+            "unstaged": unstaged,
+            "untracked": untracked,
+            "binary_text_status": binary_text_status,
+            "diff_available": (
+                (untracked and binary_text_status == "text")
+                or (not untracked and binary_text_status == "text" and (staged or unstaged))
+            ),
+        }
+        if old_path:
+            file_item["old_path"] = old_path
+
+        return {
+            "status": "ok",
+            "file": file_item,
+            "staged_records": staged_records,
+            "unstaged_records": unstaged_records,
+            "staged_numstat": staged_numstat,
+            "unstaged_numstat": unstaged_numstat,
+            "untracked_files": untracked_files,
+            "evidence": evidence,
+        }
+
+    def _targeted_path_safety(self, repo: Path, path: str, state: dict[str, Any]) -> dict[str, Any]:
+        candidate = repo / path
+        missing = not candidate.exists()
+        if missing:
+            if not (state["file"]["staged"] or state["file"]["unstaged"] or state["file"]["untracked"]):
+                return {"status": "ok"}
+            deletion = state["file"]["change_type"] == "deleted" and (
+                state["file"]["staged"] or state["file"]["unstaged"]
+            )
+            if deletion:
+                return {"status": "ok"}
+            return {"status": "blocked_unsafe", "reason": "missing"}
+        if candidate.is_symlink():
+            return {"status": "blocked_unsafe", "reason": "symlink"}
+        if candidate.is_dir():
+            return {"status": "blocked_unsafe", "reason": "directory"}
+        if not candidate.is_file():
+            return {"status": "blocked_unsafe", "reason": "non_regular_file"}
+        return {"status": "ok"}
+
+    def _resolve_changed_file_diff_source(
+        self,
+        state: dict[str, Any],
+        source: str,
+    ) -> dict[str, Any]:
+        file_item = state["file"]
+        available_sources = []
+        if file_item["staged"]:
+            available_sources.append("staged")
+        if file_item["unstaged"]:
+            available_sources.append("unstaged")
+        if file_item["untracked"]:
+            available_sources.append("untracked")
+
+        if not available_sources:
+            return {
+                "status": "blocked_unchanged",
+                "error": "path is not currently changed, staged, or untracked",
+                "available_sources": [],
+            }
+
+        if source != "auto":
+            if source not in available_sources:
+                return {
+                    "status": "blocked_unchanged",
+                    "error": f"path has no {source} change",
+                    "available_sources": available_sources,
+                }
+            return {"status": "ok", "source": source, "available_sources": available_sources}
+
+        tracked_sources = [item for item in available_sources if item in {"staged", "unstaged"}]
+        if len(tracked_sources) > 1:
+            return {
+                "status": "blocked_ambiguous_source",
+                "error": "path has both staged and unstaged changes",
+                "available_sources": ["staged", "unstaged"],
+            }
+        return {"status": "ok", "source": available_sources[0], "available_sources": available_sources}
+
+    def _targeted_diff_safety_check(
+        self,
+        repo: Path,
+        path: str,
+        source: str,
+        state: dict[str, Any],
+    ) -> dict[str, Any]:
+        if source == "untracked":
+            candidate_result = self._untracked_preview_candidate(repo, path)
+            if candidate_result["status"] != "ok":
+                return {"status": "blocked_unsafe", "reason": candidate_result["reason"]}
+            preview = self._read_untracked_preview(candidate_result["path"])
+            if preview["status"] != "included":
+                return {"status": "blocked_unsafe", "reason": preview["reason"]}
+            return {"status": "ok"}
+
+        raw_key = "staged_raw" if source == "staged" else "unstaged_raw"
+        raw_stdout = state["evidence"][raw_key]["stdout"]
+        if "120000" in raw_stdout:
+            return {"status": "blocked_unsafe", "reason": "symlink"}
+        numstat = state["staged_numstat"] if source == "staged" else state["unstaged_numstat"]
+        if numstat and numstat["binary"]:
+            return {
+                "status": "blocked_unsafe",
+                "reason": "binary",
+                "summary": {"path": path, "source": source, "binary_text_status": "binary"},
+            }
+        return {"status": "ok"}
+
+    def _run_targeted_changed_file_diff(
+        self,
+        repo: Path,
+        path: str,
+        source: str,
+        max_chars: int,
+    ) -> dict[str, Any]:
+        if source == "staged":
+            cmd = ["git", "diff", "--cached", "--", path]
+        elif source == "unstaged":
+            cmd = ["git", "diff", "--", path]
+        else:
+            cmd = ["git", "diff", "--no-index", "--", os.devnull, path]
+        return self._run_prefix(repo, cmd, timeout=20, max_chars=max_chars)
+
     def _changed_file_table(
         self,
         *,
@@ -2273,4 +2688,41 @@ class TaskRunner:
             "returncode": proc.returncode,
             "stdout": stdout,
             "stderr": stderr,
+        }
+
+    def _run_prefix(
+        self,
+        cwd: Path,
+        cmd: list[str],
+        timeout: int,
+        max_chars: int = 20000,
+    ) -> dict[str, Any]:
+        max_chars = max(0, max_chars)
+        try:
+            proc = subprocess.run(
+                cmd,
+                cwd=str(cwd),
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=timeout,
+                shell=False,
+            )
+        except FileNotFoundError as exc:
+            return {
+                "cmd": cmd,
+                "returncode": 127,
+                "stdout": "",
+                "stderr": str(exc),
+                "stdout_truncated": False,
+                "stdout_omitted_chars": 0,
+            }
+        bounded_stdout = proc.stdout[:max_chars] if max_chars else ""
+        return {
+            "cmd": cmd,
+            "returncode": proc.returncode,
+            "stdout": bounded_stdout,
+            "stderr": proc.stderr[:max_chars] if max_chars else "",
+            "stdout_truncated": len(proc.stdout) > len(bounded_stdout),
+            "stdout_omitted_chars": max(0, len(proc.stdout) - len(bounded_stdout)),
         }

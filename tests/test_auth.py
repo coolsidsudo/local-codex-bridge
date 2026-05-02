@@ -550,6 +550,7 @@ async def test_static_bearer_http_endpoint_rejects_unauthenticated_and_accepts_v
     tool_names = {tool.name for tool in tools}
     assert "list_projects" in tool_names
     assert "get_review_package" in tool_names
+    assert "get_changed_file_diff" in tool_names
     assert "git_get_branch_status" in tool_names
     assert "git_create_work_branch" in tool_names
     assert "github_create_pr" in tool_names

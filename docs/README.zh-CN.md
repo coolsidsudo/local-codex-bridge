@@ -59,6 +59,7 @@ GitHub 或其他 VCS host
 - `list_tasks` — 列出最近的 bridge 任务记录。
 - `abort_task` — 终止正在运行的本地 Codex 进程。
 - `get_review_package` — 返回紧凑、只读的变更文件索引和 status/stat 证据，不包含完整 diff 或完整文件内容。
+- `get_changed_file_diff` — 在审查 package index 之后，返回某个 changed/staged/untracked 文件的有边界 targeted diff。
 - `get_git_diff` — 检查 git status、unstaged/staged diffs，以及有边界的 untracked 文件预览。
 - `git_get_branch_status` — 返回当前分支、dirty 状态、HEAD、remotes、upstream 和 ahead/behind 证据。
 - `git_create_work_branch` — 基于已有本地 base 分支创建并切换到新的本地工作分支。
@@ -96,7 +97,7 @@ ChatGPT 规划 / 审查
   -> Local Codex Bridge 执行受控 git add/commit/push
 ```
 
-只有在人工已经审查来自 `get_git_diff` 和 `run_verification` 的精确 diff 和验证证据后，才应调用 `git_commit_and_push`。作为第一步审查索引，`get_review_package` 会返回 branch/HEAD/remotes、status/stat 证据、变更文件分类和有边界的 untracked 预览元数据，但不返回完整 diff 或完整文件内容。`get_git_diff` 会区分 unstaged 和 staged 变更，并在安全时包含有边界的 untracked 文本预览。它的安全措施包括：
+只有在人工已经审查来自 `get_git_diff` 和 `run_verification` 的精确 diff 和验证证据后，才应调用 `git_commit_and_push`。作为第一步审查索引，`get_review_package` 会返回 branch/HEAD/remotes、status/stat 证据、变更文件分类和有边界的 untracked 预览元数据，但不返回完整 diff 或完整文件内容。`get_changed_file_diff` 是只读 follow-up，用于单个 changed/staged/untracked 路径；它使用 targeted fixed git commands，拒绝 unsafe path 和 binary content，并限制输出大小。`get_git_diff` 会区分 unstaged 和 staged 变更，并在安全时包含有边界的 untracked 文本预览。它的安全措施包括：
 
 - 只能访问已配置项目根目录。
 - 不暴露任意 shell 执行。
