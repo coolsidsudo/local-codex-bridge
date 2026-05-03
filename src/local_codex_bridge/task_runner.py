@@ -68,6 +68,7 @@ CHANGED_FILE_TEXT_DEFAULT_MAX_CHARS = 60000
 CHANGED_FILE_TEXT_MIN_READ_BYTES = 4096
 CHANGED_FILE_TEXT_UTF8_BOUNDARY_BYTES = 4
 CHANGED_FILE_TEXT_MAX_READ_BYTES = 1024 * 1024
+VERIFICATION_OUTPUT_MAX_CHARS = 40000
 
 
 def _apply_review_contract(prompt: str) -> tuple[str, bool]:
@@ -964,15 +965,136 @@ class TaskRunner:
             **after_evidence,
         }
 
-    def run_verification(self, project_id: str, command_key: str, timeout: int = 600) -> dict[str, Any]:
+    def run_verification(
+        self,
+        project_id: str,
+        command_key: str,
+        timeout: int = 600,
+    ) -> dict[str, Any]:
         project = self._project(project_id)
-        if command_key not in project.verification:
-            raise ValueError(
-                f"Verification command '{command_key}' is not allowlisted. "
-                f"Available: {sorted(project.verification)}"
-            )
-        cmd = project.verification[command_key]
-        return self._run(project.path, cmd, timeout=timeout, max_chars=40000)
+        cmd = self._resolve_verification_command(project, command_key)
+        return self._run(
+            project.path,
+            cmd,
+            timeout=timeout,
+            max_chars=VERIFICATION_OUTPUT_MAX_CHARS,
+        )
+
+    def run_verification_bundle(
+        self,
+        project_id: str,
+        command_keys: list[str],
+        timeout_per_command: int = 600,
+        stop_on_fail: bool = False,
+    ) -> dict[str, Any]:
+        started_at = time.monotonic()
+        try:
+            project = self._project(project_id)
+        except ValueError as exc:
+            return {"status": "blocked_input", "error": str(exc)}
+
+        if not isinstance(command_keys, list):
+            return {"status": "blocked_input", "error": "command_keys must be a non-empty list"}
+        if not command_keys:
+            return {"status": "blocked_input", "error": "command_keys must not be empty"}
+        if (
+            not isinstance(timeout_per_command, int)
+            or isinstance(timeout_per_command, bool)
+            or timeout_per_command <= 0
+        ):
+            return {
+                "status": "blocked_input",
+                "error": "timeout_per_command must be a positive integer",
+            }
+        if not isinstance(stop_on_fail, bool):
+            return {"status": "blocked_input", "error": "stop_on_fail must be a boolean"}
+
+        commands: list[tuple[str, list[str]]] = []
+        for command_key in command_keys:
+            if not isinstance(command_key, str):
+                return {
+                    "status": "blocked_input",
+                    "error": "command_keys must contain only strings",
+                }
+            if not command_key.strip():
+                return {
+                    "status": "blocked_input",
+                    "error": "command_keys must not contain blank strings",
+                }
+            try:
+                commands.append(
+                    (command_key, self._resolve_verification_command(project, command_key))
+                )
+            except ValueError as exc:
+                return {"status": "blocked_input", "error": str(exc)}
+
+        results: list[dict[str, Any]] = []
+        summary = {"passed": 0, "failed": 0, "not_run": 0}
+        try:
+            stop_remaining = False
+            for command_key, cmd in commands:
+                if stop_remaining:
+                    summary["not_run"] += 1
+                    results.append(
+                        {
+                            "command_key": command_key,
+                            "cmd": cmd,
+                            "returncode": None,
+                            "stdout": "",
+                            "stderr": "",
+                            "stdout_truncated": False,
+                            "stderr_truncated": False,
+                            "stdout_omitted_chars": 0,
+                            "stderr_omitted_chars": 0,
+                            "elapsed_seconds": 0.0,
+                            "status": "not_run",
+                            "reason": "not run because stop_on_fail halted after a failed command",
+                        }
+                    )
+                    continue
+
+                result = self._run_verification_bundle_command(
+                    project.path,
+                    command_key,
+                    cmd,
+                    timeout=timeout_per_command,
+                    max_chars=VERIFICATION_OUTPUT_MAX_CHARS,
+                )
+                results.append(result)
+                if result["status"] == "passed":
+                    summary["passed"] += 1
+                else:
+                    summary["failed"] += 1
+                    if stop_on_fail:
+                        stop_remaining = True
+        except Exception as exc:
+            # Defensive guard for unexpected orchestration errors.
+            return {
+                "status": "blocked_verification",
+                "error": str(exc),
+                "project_id": project_id,
+                "name": project.name,
+                "path": str(project.path),
+                "requested_command_keys": command_keys,
+                "timeout_per_command": timeout_per_command,
+                "stop_on_fail": stop_on_fail,
+                "elapsed_seconds": round(time.monotonic() - started_at, 3),
+                "summary": summary,
+                "results": results,
+            }
+
+        return {
+            "status": "failed_verification" if summary["failed"] else "ok",
+            "project_id": project_id,
+            "name": project.name,
+            "path": str(project.path),
+            "requested_command_keys": command_keys,
+            "timeout_per_command": timeout_per_command,
+            "stop_on_fail": stop_on_fail,
+            "elapsed_seconds": round(time.monotonic() - started_at, 3),
+            "summary": summary,
+            "results": results,
+        }
 
     def git_commit_and_push(
         self,
@@ -3263,6 +3385,95 @@ class TaskRunner:
             "stdout": stdout,
             "stderr": stderr,
         }
+
+    def _resolve_verification_command(self, project: ProjectConfig, command_key: str) -> list[str]:
+        if command_key not in project.verification:
+            raise ValueError(
+                f"Verification command '{command_key}' is not allowlisted. "
+                f"Available: {sorted(project.verification)}"
+            )
+        return project.verification[command_key]
+
+    def _run_verification_bundle_command(
+        self,
+        cwd: Path,
+        command_key: str,
+        cmd: list[str],
+        timeout: int,
+        max_chars: int,
+    ) -> dict[str, Any]:
+        started_at = time.monotonic()
+        reason = None
+        try:
+            proc = subprocess.run(
+                cmd,
+                cwd=str(cwd),
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=timeout,
+                shell=False,
+            )
+            returncode: int | None = proc.returncode
+            stdout_value: str | bytes | None = proc.stdout
+            stderr_value: str | bytes | None = proc.stderr
+            if returncode != 0:
+                reason = "nonzero exit status"
+        except FileNotFoundError as exc:
+            returncode = 127
+            stdout_value = ""
+            stderr_value = str(exc)
+            reason = "executable not found"
+        except subprocess.TimeoutExpired as exc:
+            returncode = None
+            stdout_value = exc.stdout
+            stderr_value = exc.stderr
+            reason = f"timed out after {timeout} seconds"
+
+        stdout, stdout_truncated, stdout_omitted_chars = self._bounded_verification_output(
+            stdout_value,
+            max_chars,
+        )
+        stderr, stderr_truncated, stderr_omitted_chars = self._bounded_verification_output(
+            stderr_value,
+            max_chars,
+        )
+        return {
+            "command_key": command_key,
+            "cmd": cmd,
+            "returncode": returncode,
+            "stdout": stdout,
+            "stderr": stderr,
+            "stdout_truncated": stdout_truncated,
+            "stderr_truncated": stderr_truncated,
+            "stdout_omitted_chars": stdout_omitted_chars,
+            "stderr_omitted_chars": stderr_omitted_chars,
+            "elapsed_seconds": round(time.monotonic() - started_at, 3),
+            "status": "passed" if returncode == 0 else "failed",
+            "reason": reason,
+        }
+
+    def _bounded_verification_output(
+        self,
+        value: str | bytes | None,
+        max_chars: int,
+    ) -> tuple[str, bool, int]:
+        if value is None:
+            text = ""
+        elif isinstance(value, bytes):
+            text = value.decode(errors="replace")
+        else:
+            text = value
+
+        max_chars = max(0, max_chars)
+        bounded = (
+            text[-max_chars:]
+            if max_chars and len(text) > max_chars
+            else (text if max_chars else "")
+        )
+        truncated = len(text) > len(bounded)
+        omitted_chars = max(0, len(text) - len(bounded))
+        return bounded, truncated, omitted_chars
 
     def _run_prefix(
         self,

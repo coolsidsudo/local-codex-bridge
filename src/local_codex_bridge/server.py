@@ -137,6 +137,21 @@ def build_mcp(config: str | Path | BridgeConfig) -> FastMCP:
         return runner.run_verification(project_id, command_key, timeout=timeout)
 
     @mcp.tool
+    def run_verification_bundle(
+        project_id: str,
+        command_keys: list[str],
+        timeout_per_command: int = 600,
+        stop_on_fail: bool = False,
+    ) -> dict[str, Any]:
+        """Run multiple allowlisted verification commands sequentially for a configured project."""
+        return runner.run_verification_bundle(
+            project_id=project_id,
+            command_keys=command_keys,
+            timeout_per_command=timeout_per_command,
+            stop_on_fail=stop_on_fail,
+        )
+
+    @mcp.tool
     def git_commit_and_push(
         project_id: str,
         files: list[str],
