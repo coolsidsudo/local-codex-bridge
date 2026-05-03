@@ -20,6 +20,22 @@ UNTRACKED_PREVIEW_MAX_FILES = 20
 UNTRACKED_PREVIEW_MAX_BYTES_PER_FILE = 4096
 UNTRACKED_PREVIEW_MAX_TOTAL_CHARS = 12000
 REVIEW_PACKAGE_VERSION = 1
+REVIEW_CONTRACT_VERSION = 1
+REVIEW_CONTRACT_MARKER = "## Local Codex Bridge review contract (v1)"
+REVIEW_CONTRACT_FOOTER = f"""---
+{REVIEW_CONTRACT_MARKER}
+
+Follow this contract for this local Codex task:
+- Implement only the requested bounded slice; do not broaden scope.
+- Do not commit, push, create a PR, or touch tags/releases.
+- Do not paste full diffs or full file contents in your final response.
+- Return a concise implementation summary.
+- List changed files.
+- List exact verification commands run and their results.
+- List risks, deviations, or follow-up needs.
+- Confirm no commit, push, PR, tag, or release work was performed.
+- ChatGPT will inspect actual repository state through Local Codex Bridge review tools, not from pasted diffs: `get_review_package`, `get_changed_file_diff`, `get_changed_file_text`, and `run_verification`.
+"""
 REVIEW_PACKAGE_UNTRACKED_EXCERPT_MAX_CHARS = 1000
 BRANCH_NAME_MAX_CHARS = 200
 BRANCH_NAME_ALLOWED_RE = re.compile(r"^[A-Za-z0-9._/-]+$")
@@ -52,6 +68,14 @@ CHANGED_FILE_TEXT_DEFAULT_MAX_CHARS = 60000
 CHANGED_FILE_TEXT_MIN_READ_BYTES = 4096
 CHANGED_FILE_TEXT_UTF8_BOUNDARY_BYTES = 4
 CHANGED_FILE_TEXT_MAX_READ_BYTES = 1024 * 1024
+
+
+def _apply_review_contract(prompt: str) -> tuple[str, bool]:
+    if REVIEW_CONTRACT_MARKER in prompt:
+        return prompt, False
+    base = prompt.rstrip()
+    separator = "\n\n" if base else ""
+    return f"{base}{separator}{REVIEW_CONTRACT_FOOTER}\n", True
 
 
 @dataclass
@@ -118,12 +142,17 @@ class TaskRunner:
         model: str | None = None,
         extra_codex_args: list[str] | None = None,
         dry_run: bool = False,
+        review_contract: bool = False,
     ) -> dict[str, Any]:
         project = self._project(project_id)
         task_id = time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:8]
         rec = self._task_record(task_id, project_id)
         rec.task_path.mkdir(parents=True, exist_ok=False)
-        rec.prompt_path.write_text(prompt, encoding="utf-8")
+        effective_prompt = prompt
+        review_contract_footer_appended = False
+        if review_contract:
+            effective_prompt, review_contract_footer_appended = _apply_review_contract(prompt)
+        rec.prompt_path.write_text(effective_prompt, encoding="utf-8")
 
         effective_model = model or project.default_model or self.config.server.default_model
         cmd = [self.config.server.codex_bin, "exec"]
@@ -140,6 +169,9 @@ class TaskRunner:
             "model": effective_model,
             "cmd": cmd,
             "dry_run": dry_run,
+            "review_contract_requested": review_contract,
+            "review_contract_version": REVIEW_CONTRACT_VERSION if review_contract else None,
+            "review_contract_footer_appended": review_contract_footer_appended,
             "created_at": time.time(),
             "status": "dry_run" if dry_run else "running",
         }

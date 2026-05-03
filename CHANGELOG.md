@@ -7,6 +7,7 @@
 - `get_review_package` MCP tool for a compact read-only changed-file review index without full diffs or full file contents.
 - `get_changed_file_diff` MCP tool for one bounded targeted changed-file diff with staged, unstaged, untracked, and auto source modes.
 - `get_changed_file_text` MCP tool for bounded UTF-8 text from one currently changed/staged/untracked file.
+- Optional `start_codex_task` review contract guidance for concise Codex implementation summaries.
 
 ## [0.2.0] - 2026-05-02
 

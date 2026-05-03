@@ -156,13 +156,26 @@ def dry_run_task(
     project_id: str,
     prompt_file: Path,
     model: str | None = None,
+    review_contract: bool = typer.Option(
+        False,
+        "--review-contract",
+        help="Append the Local Codex Bridge review contract footer to the task prompt.",
+    ),
     config: Path = typer.Option(DEFAULT_CONFIG, "--config", "-c"),
 ) -> None:
     """Create a task record without starting Codex."""
     cfg = BridgeConfig.load(config)
     runner = TaskRunner(cfg)
     prompt = prompt_file.read_text(encoding="utf-8")
-    print(runner.start_codex_task(project_id, prompt, model=model, dry_run=True))
+    print(
+        runner.start_codex_task(
+            project_id,
+            prompt,
+            model=model,
+            dry_run=True,
+            review_contract=review_contract,
+        )
+    )
 
 
 if __name__ == "__main__":
