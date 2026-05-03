@@ -16,6 +16,7 @@ Local Codex Bridge is project-agnostic: configured project roots are trust bound
 - Use `get_review_package` for a compact read-only changed-file index before requesting targeted diffs or text.
 - Review staged/unstaged diffs, bounded untracked previews, and verification output before accepting changes.
 - Use `git_create_work_branch` only when the configured repo is clean and the intended base branch is clear.
+- Use `get_acceptance_readiness` as a read-only preflight before the human-approved commit/push step.
 - Use `git_commit_and_push` only after explicit human approval of the exact files and commit message.
 - Use `github_create_pr` only after the current branch has already been intentionally pushed to `origin`.
 - Keep secrets out of task prompts and logs.
@@ -63,6 +64,8 @@ ChatGPT plans/reviews
 ```
 
 `get_review_package` is read-only. It uses fixed git status/name-status/stat/numstat commands and existing safe untracked preview checks to report a changed-file index without full diffs or full file contents. It does not run verification commands, mutate branches, stage files, commit, push, create PRs, or touch tags/releases.
+
+`get_acceptance_readiness` is read-only. It preflights an approved file list against local git evidence before a human-approved `git_commit_and_push`: branch/HEAD/remotes, detached state, staged/unstaged/untracked files, approved-file coverage, origin presence, and upstream ahead/behind when locally available. It does not stage, commit, push, fetch, mutate branches, create PRs, merge, or touch tags/releases, and it is not a replacement for `git_commit_and_push`'s own safety checks.
 
 `get_changed_file_diff` is read-only. It returns one bounded targeted diff for an exact changed/staged/untracked repo-relative path. It uses fixed git argv only, refuses clean/absent paths, outside-repo paths, directories, symlinks, binary or unsafe untracked files, and does not run verification commands or perform any Git/GitHub mutations.
 
