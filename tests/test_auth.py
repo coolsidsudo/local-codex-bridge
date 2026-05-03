@@ -575,5 +575,14 @@ async def test_static_bearer_http_endpoint_rejects_unauthenticated_and_accepts_v
     assert "get_changed_file_text" in tool_names
     assert "git_get_branch_status" in tool_names
     assert "git_create_work_branch" in tool_names
+    assert "get_acceptance_readiness" in tool_names
+    acceptance_readiness = next(tool for tool in tools if tool.name == "get_acceptance_readiness")
+    acceptance_readiness_schema = getattr(acceptance_readiness, "parameters", None)
+    if acceptance_readiness_schema is None:
+        acceptance_readiness_schema = acceptance_readiness.inputSchema
+    assert acceptance_readiness_schema["properties"]["remote"] == {
+        "default": "origin",
+        "type": "string",
+    }
     assert "github_create_pr" in tool_names
     assert "github_get_pr_status" in tool_names

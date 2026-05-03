@@ -128,6 +128,21 @@ def build_mcp(config: str | Path | BridgeConfig) -> FastMCP:
         )
 
     @mcp.tool
+    def get_acceptance_readiness(
+        project_id: str,
+        approved_files: list[str],
+        remote: str = "origin",
+        branch: str | None = None,
+    ) -> dict[str, Any]:
+        """Read-only preflight for a human-approved git_commit_and_push operation."""
+        return runner.get_acceptance_readiness(
+            project_id=project_id,
+            approved_files=approved_files,
+            remote=remote,
+            branch=branch,
+        )
+
+    @mcp.tool
     def run_verification(
         project_id: str,
         command_key: str,

@@ -306,6 +306,260 @@ class TaskRunner:
 
         return {"status": "ok", **evidence}
 
+    def get_acceptance_readiness(
+        self,
+        project_id: str,
+        approved_files: list[str],
+        remote: str = "origin",
+        branch: str | None = None,
+    ) -> dict[str, Any]:
+        try:
+            project = self._project(project_id)
+        except ValueError as exc:
+            return {
+                "status": "blocked_input",
+                "error": str(exc),
+                "project_id": project_id,
+                "ready": False,
+                "blocking_reasons": [str(exc)],
+                "warnings": [],
+                "limits": {"read_only": True, "mutation_performed": False},
+            }
+
+        repo = project.path
+        base: dict[str, Any] = {
+            "project_id": project_id,
+            "name": project.name,
+            "path": str(repo),
+            "ready": False,
+            "blocking_reasons": [],
+            "warnings": [],
+            "approved_files_requested": approved_files if isinstance(approved_files, list) else [],
+            "approved_files_normalized": [],
+            "remote": remote,
+            "branch_requested": branch,
+            "push_branch": None,
+            "current_branch": None,
+            "detached": False,
+            "dirty": False,
+            "head": None,
+            "changed_files": {"staged": [], "unstaged": [], "untracked": [], "all": []},
+            "coverage": {
+                "changed_but_not_approved": [],
+                "approved_but_not_changed": [],
+                "unapproved_staged": [],
+                "staged_not_approved": [],
+                "staged_within_approved": False,
+                "approved_changed_files": [],
+            },
+            "git": {},
+            "limits": {"read_only": True, "mutation_performed": False},
+        }
+
+        if not isinstance(approved_files, list):
+            return {
+                **base,
+                "status": "blocked_input",
+                "error": "approved_files must be a list",
+                "blocking_reasons": ["approved_files must be a list"],
+            }
+        if remote != "origin":
+            return {
+                **base,
+                "status": "blocked_input",
+                "error": "Only remote='origin' is supported",
+                "blocking_reasons": ["Only remote='origin' is supported"],
+            }
+        if branch is not None and not isinstance(branch, str):
+            return {
+                **base,
+                "status": "blocked_input",
+                "error": "branch must be a string when provided",
+                "blocking_reasons": ["branch must be a string when provided"],
+            }
+        if branch is not None and not branch.strip():
+            return {
+                **base,
+                "status": "blocked_input",
+                "error": "branch must not be blank when provided",
+                "blocking_reasons": ["branch must not be blank when provided"],
+            }
+        if any(not isinstance(item, str) for item in approved_files):
+            return {
+                **base,
+                "status": "blocked_input",
+                "error": "approved_files entries must be strings",
+                "blocking_reasons": ["approved_files entries must be strings"],
+            }
+
+        if approved_files:
+            approved_files_result = self._normalize_approved_files(repo, approved_files)
+            if approved_files_result["status"] != "ok":
+                return {
+                    **base,
+                    "status": "blocked_input",
+                    "error": approved_files_result["error"],
+                    "blocking_reasons": [approved_files_result["error"]],
+                }
+            normalized_approved_files = approved_files_result["files"]
+        else:
+            normalized_approved_files = []
+
+        short_status = self._run(repo, ["git", "status", "--short", "--branch"], timeout=20)
+        porcelain_status_raw = self._git_z_full(
+            repo,
+            ["git", "status", "--porcelain=v1", "-z", "--untracked-files=normal"],
+            timeout=20,
+        )
+        current_branch_result = self._current_branch(repo)
+        current_branch = current_branch_result.get("stdout", "").strip()
+        head = self._run(repo, ["git", "rev-parse", "--verify", "HEAD"], timeout=20)
+        remotes = self._run(repo, ["git", "remote", "-v"], timeout=20)
+        origin_url = self._run(repo, ["git", "remote", "get-url", "origin"], timeout=20)
+        staged_files = self._staged_files(repo)
+        untracked_files = self._untracked_files(repo)
+        upstream_info = self._upstream_info(repo)
+
+        git_evidence = {
+            "status_short_branch": short_status,
+            "porcelain_status": porcelain_status_raw["evidence"],
+            "current_branch_result": current_branch_result,
+            "head": head,
+            "staged_files": staged_files,
+            "untracked_files": untracked_files,
+            "remotes": remotes,
+            "origin_url": origin_url,
+            "upstream_result": upstream_info["upstream_result"],
+            "ahead_behind_result": upstream_info["ahead_behind_result"],
+            "upstream": upstream_info["upstream"],
+            "ahead_behind": upstream_info["ahead_behind"],
+        }
+        base.update(
+            {
+                "approved_files_normalized": normalized_approved_files,
+                "current_branch": current_branch or None,
+                "push_branch": branch or current_branch or None,
+                "detached": current_branch_result["returncode"] != 0 or not current_branch,
+                "head": head["stdout"].strip() if head["returncode"] == 0 else None,
+                "git": git_evidence,
+            }
+        )
+
+        blocking_git_results = [
+            ("status_short_branch", short_status),
+            ("porcelain_status", porcelain_status_raw["evidence"]),
+            ("current_branch_result", current_branch_result),
+            ("head", head),
+            ("staged_files", staged_files),
+            ("untracked_files", untracked_files),
+            ("remotes", remotes),
+        ]
+        for key, result in blocking_git_results:
+            if result["returncode"] != 0:
+                return {
+                    **base,
+                    "status": "blocked_git",
+                    "error": f"git command failed while collecting {key}",
+                    "blocking_reasons": [f"git command failed while collecting {key}"],
+                }
+        if upstream_info.get("upstream") and upstream_info["ahead_behind_result"]["returncode"] != 0:
+            return {
+                **base,
+                "status": "blocked_git",
+                "error": "git command failed while collecting upstream ahead/behind",
+                "blocking_reasons": ["git command failed while collecting upstream ahead/behind"],
+            }
+
+        porcelain_records = self._parse_porcelain_status_z(porcelain_status_raw["stdout"])
+        staged = sorted(
+            {
+                record["path"]
+                for record in porcelain_records
+                if record["index_status"] not in {" ", "?"}
+            }
+        )
+        unstaged = sorted(
+            {
+                record["path"]
+                for record in porcelain_records
+                if record["worktree_status"] not in {" ", "?"}
+            }
+        )
+        untracked = sorted(
+            {
+                record["path"]
+                for record in porcelain_records
+                if record["index_status"] == "?" and record["worktree_status"] == "?"
+            }
+        )
+        all_changed = sorted(set(staged) | set(unstaged) | set(untracked))
+        approved_set = set(normalized_approved_files)
+        changed_set = set(all_changed)
+        staged_set = set(staged_files["files"])
+        changed_but_not_approved = sorted(changed_set - approved_set)
+        approved_but_not_changed = sorted(approved_set - changed_set)
+        unapproved_staged = sorted(staged_set - approved_set)
+        approved_changed_files = sorted(approved_set & changed_set)
+        ahead_behind = upstream_info["ahead_behind"]
+
+        blocking_reasons: list[str] = []
+        warnings: list[str] = []
+        if not normalized_approved_files:
+            blocking_reasons.append("approved_files must not be empty")
+        if not current_branch:
+            blocking_reasons.append(
+                "Current branch could not be determined; detached or invalid HEAD is not ready"
+            )
+        elif branch is not None and branch != current_branch:
+            blocking_reasons.append("Requested branch does not match current checked-out branch")
+        if origin_url["returncode"] != 0:
+            blocking_reasons.append("origin remote is not configured")
+        if changed_but_not_approved:
+            blocking_reasons.append("Changed files are not included in approved_files")
+        if approved_but_not_changed:
+            blocking_reasons.append("Approved files are not currently changed")
+        if unapproved_staged:
+            blocking_reasons.append("Unapproved files are already staged")
+        if ahead_behind:
+            if ahead_behind["behind"] > 0:
+                blocking_reasons.append("Current branch is behind upstream")
+            if ahead_behind["ahead"] > 0:
+                blocking_reasons.append("Current branch is already ahead of upstream")
+        else:
+            warnings.append("No upstream ahead/behind evidence is available")
+        if untracked_files.get("truncated"):
+            warnings.append("Untracked file list was truncated")
+
+        base.update(
+            {
+                "status": "ok",
+                "ready": not blocking_reasons,
+                "blocking_reasons": blocking_reasons,
+                "warnings": warnings,
+                "remote": remote,
+                "branch_requested": branch,
+                "push_branch": branch or current_branch or None,
+                "current_branch": current_branch or None,
+                "detached": not current_branch,
+                "dirty": bool(porcelain_records),
+                "changed_files": {
+                    "staged": staged,
+                    "unstaged": unstaged,
+                    "untracked": untracked,
+                    "all": all_changed,
+                },
+                "coverage": {
+                    "changed_but_not_approved": changed_but_not_approved,
+                    "approved_but_not_changed": approved_but_not_changed,
+                    "unapproved_staged": unapproved_staged,
+                    "staged_not_approved": unapproved_staged,
+                    "staged_within_approved": staged_set <= approved_set,
+                    "approved_changed_files": approved_changed_files,
+                },
+            }
+        )
+        return base
+
     def get_review_package(self, project_id: str, max_chars: int = 20000) -> dict[str, Any]:
         if not isinstance(max_chars, int) or max_chars < 0:
             return {"status": "blocked_input", "error": "max_chars must be a non-negative integer"}
