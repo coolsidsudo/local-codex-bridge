@@ -48,6 +48,10 @@ GITHUB_PR_JSON_FIELDS = ",".join(
     ]
 )
 GH_JSON_MAX_CHARS = 60000
+CHANGED_FILE_TEXT_DEFAULT_MAX_CHARS = 60000
+CHANGED_FILE_TEXT_MIN_READ_BYTES = 4096
+CHANGED_FILE_TEXT_UTF8_BOUNDARY_BYTES = 4
+CHANGED_FILE_TEXT_MAX_READ_BYTES = 1024 * 1024
 
 
 @dataclass
@@ -570,6 +574,140 @@ class TaskRunner:
                 "max_chars": max_chars,
                 "omitted_chars": diff["stdout_omitted_chars"],
             },
+        }
+
+    def get_changed_file_text(
+        self,
+        project_id: str,
+        path: str,
+        source: str = "auto",
+        max_chars: int = CHANGED_FILE_TEXT_DEFAULT_MAX_CHARS,
+    ) -> dict[str, Any]:
+        if not isinstance(max_chars, int) or max_chars < 0:
+            return {"status": "blocked_input", "error": "max_chars must be a non-negative integer"}
+
+        source_result = self._validate_changed_file_text_source(source)
+        if source_result["status"] != "ok":
+            return source_result
+        source_requested = source_result["source"]
+
+        project = self._project(project_id)
+        repo = project.path
+        path_result = self._normalize_changed_file_diff_path(repo, path)
+        if path_result["status"] != "ok":
+            return path_result
+        normalized_path = path_result["path"]
+
+        state = self._target_changed_file_state(repo, normalized_path)
+        if state["status"] != "ok":
+            return {
+                "status": "blocked_git",
+                "error": state["error"],
+                "project_id": project_id,
+                "name": project.name,
+                "path": str(repo),
+                "requested_path": path,
+                "normalized_path": normalized_path,
+                "source_requested": source_requested,
+                "evidence": state["evidence"],
+            }
+
+        initial_safety = self._changed_file_text_initial_path_safety(repo, normalized_path)
+        if initial_safety["status"] != "ok":
+            return {
+                "status": "blocked_unsafe",
+                "reason": initial_safety["reason"],
+                "project_id": project_id,
+                "name": project.name,
+                "path": str(repo),
+                "requested_path": path,
+                "normalized_path": normalized_path,
+                "source_requested": source_requested,
+                "file": state["file"],
+                "evidence": state["evidence"],
+            }
+
+        resolution = self._resolve_changed_file_text_source(state, source_requested)
+        if resolution["status"] != "ok":
+            return {
+                **resolution,
+                "project_id": project_id,
+                "name": project.name,
+                "path": str(repo),
+                "requested_path": path,
+                "normalized_path": normalized_path,
+                "source_requested": source_requested,
+                "file": state["file"],
+                "evidence": state["evidence"],
+            }
+        source_resolved = resolution["source"]
+
+        text_safety = self._targeted_text_safety_check(repo, normalized_path, source_resolved, state)
+        if text_safety["status"] != "ok":
+            blocked = {
+                "status": text_safety["status"],
+                "reason": text_safety["reason"],
+                "project_id": project_id,
+                "name": project.name,
+                "path": str(repo),
+                "requested_path": path,
+                "normalized_path": normalized_path,
+                "source_requested": source_requested,
+                "source_resolved": source_resolved,
+                "file": state["file"],
+                "evidence": {**state["evidence"], **text_safety.get("evidence", {})},
+            }
+            if text_safety["status"] in {"blocked_deleted", "blocked_no_content"}:
+                blocked["suggested_next_tool"] = "get_changed_file_diff"
+            return blocked
+
+        if source_resolved == "staged":
+            read_result = self._read_changed_staged_text(repo, normalized_path, max_chars=max_chars)
+        elif source_resolved == "untracked":
+            read_result = self._read_changed_untracked_text(repo, normalized_path, max_chars=max_chars)
+        else:
+            read_result = self._read_changed_worktree_text(repo, normalized_path, max_chars=max_chars)
+
+        if read_result["status"] != "ok":
+            blocked = {
+                "status": read_result["status"],
+                "reason": read_result["reason"],
+                "project_id": project_id,
+                "name": project.name,
+                "path": str(repo),
+                "requested_path": path,
+                "normalized_path": normalized_path,
+                "source_requested": source_requested,
+                "source_resolved": source_resolved,
+                "file": state["file"],
+                "evidence": {**state["evidence"], **read_result.get("evidence", {})},
+            }
+            if read_result["status"] in {"blocked_deleted", "blocked_no_content"}:
+                blocked["suggested_next_tool"] = "get_changed_file_diff"
+            return blocked
+
+        content = read_result["content"]
+        truncation = read_result["truncation"]
+        return {
+            "status": "ok",
+            "project_id": project_id,
+            "name": project.name,
+            "path": str(repo),
+            "requested_path": path,
+            "normalized_path": normalized_path,
+            "source_requested": source_requested,
+            "source_resolved": source_resolved,
+            "file": state["file"],
+            "content": content,
+            "evidence": {**state["evidence"], **read_result.get("evidence", {})},
+            "limits": {
+                "max_chars": max_chars,
+                "targeted_path_only": True,
+                "changed_file_only": True,
+                "binary_content_included": False,
+                "verification_executed": False,
+            },
+            "truncation": truncation,
         }
 
     def git_create_work_branch(
@@ -1778,6 +1916,18 @@ class TaskRunner:
             }
         return {"status": "ok", "source": source}
 
+    def _validate_changed_file_text_source(self, source: str) -> dict[str, Any]:
+        if not isinstance(source, str):
+            return {"status": "blocked_input", "error": "source must be a string"}
+        allowed = {"auto", "worktree", "staged", "untracked"}
+        if source not in allowed:
+            return {
+                "status": "blocked_input",
+                "error": "source must be one of auto, worktree, staged, untracked",
+                "allowed_sources": sorted(allowed),
+            }
+        return {"status": "ok", "source": source}
+
     def _normalize_changed_file_diff_path(self, repo: Path, path: str) -> dict[str, Any]:
         if not isinstance(path, str):
             return {"status": "blocked_input", "error": "path must be a string"}
@@ -2042,6 +2192,398 @@ class TaskRunner:
         else:
             cmd = ["git", "diff", "--no-index", "--", os.devnull, path]
         return self._run_prefix(repo, cmd, timeout=20, max_chars=max_chars)
+
+    def _changed_file_text_initial_path_safety(self, repo: Path, path: str) -> dict[str, Any]:
+        candidate = repo / path
+        if not candidate.exists():
+            return {"status": "ok"}
+        if candidate.is_symlink():
+            return {"status": "blocked_unsafe", "reason": "symlink"}
+        if candidate.is_dir():
+            return {"status": "blocked_unsafe", "reason": "directory"}
+        if not candidate.is_file():
+            return {"status": "blocked_unsafe", "reason": "non_regular_file"}
+        return {"status": "ok"}
+
+    def _resolve_changed_file_text_source(
+        self,
+        state: dict[str, Any],
+        source: str,
+    ) -> dict[str, Any]:
+        file_item = state["file"]
+        if file_item["untracked"]:
+            available_sources = ["untracked"]
+        else:
+            available_sources = []
+            if file_item["staged"]:
+                available_sources.append("staged")
+            if file_item["staged"] or file_item["unstaged"]:
+                available_sources.append("worktree")
+
+        if not available_sources:
+            return {
+                "status": "blocked_unchanged",
+                "error": "path is not currently changed, staged, or untracked",
+                "available_sources": [],
+            }
+
+        if source != "auto":
+            if source not in available_sources:
+                return {
+                    "status": "blocked_unchanged",
+                    "error": f"path has no {source} content source",
+                    "available_sources": available_sources,
+                }
+            return {"status": "ok", "source": source, "available_sources": available_sources}
+
+        if file_item["untracked"]:
+            return {"status": "ok", "source": "untracked", "available_sources": available_sources}
+        if file_item["staged"] and file_item["unstaged"]:
+            return {
+                "status": "blocked_ambiguous_source",
+                "error": "path has both staged and worktree changes",
+                "available_sources": ["staged", "worktree"],
+            }
+        if file_item["staged"]:
+            return {"status": "ok", "source": "staged", "available_sources": available_sources}
+        return {"status": "ok", "source": "worktree", "available_sources": available_sources}
+
+    def _targeted_text_safety_check(
+        self,
+        repo: Path,
+        path: str,
+        source: str,
+        state: dict[str, Any],
+    ) -> dict[str, Any]:
+        file_item = state["file"]
+        if file_item["change_type"] == "deleted":
+            return {"status": "blocked_deleted", "reason": "deleted"}
+
+        if source == "untracked":
+            candidate_result = self._untracked_preview_candidate(repo, path)
+            if candidate_result["status"] != "ok":
+                return {"status": "blocked_unsafe", "reason": candidate_result["reason"]}
+            return {"status": "ok"}
+
+        if source == "worktree":
+            safety = self._targeted_path_safety(repo, path, state)
+            if safety["status"] != "ok":
+                return {"status": "blocked_unsafe", "reason": safety["reason"]}
+            if file_item["binary_text_status"] == "binary":
+                return {"status": "blocked_unsafe", "reason": "binary"}
+            return {"status": "ok"}
+
+        raw_stdout = state["evidence"]["staged_raw"]["stdout"]
+        if "120000" in raw_stdout:
+            return {"status": "blocked_unsafe", "reason": "symlink"}
+        if "160000" in raw_stdout:
+            return {"status": "blocked_unsafe", "reason": "gitlink"}
+        numstat = state["staged_numstat"]
+        if numstat and numstat["binary"]:
+            return {"status": "blocked_unsafe", "reason": "binary"}
+        return {"status": "ok"}
+
+    def _changed_file_text_read_budget(self, max_chars: int, file_size: int | None) -> int:
+        budget = max(
+            CHANGED_FILE_TEXT_MIN_READ_BYTES,
+            (max_chars * 4) + CHANGED_FILE_TEXT_UTF8_BOUNDARY_BYTES,
+        )
+        budget = min(budget, CHANGED_FILE_TEXT_MAX_READ_BYTES)
+        if file_size is not None:
+            budget = min(budget, file_size)
+        return max(0, budget)
+
+    def _read_changed_worktree_text(
+        self,
+        repo: Path,
+        path: str,
+        max_chars: int,
+    ) -> dict[str, Any]:
+        candidate = repo / path
+        read_result = self._read_changed_filesystem_text(candidate, max_chars=max_chars)
+        if "evidence" not in read_result:
+            read_result["evidence"] = {}
+        read_result["evidence"]["worktree_read"] = {
+            "path": path,
+            "source": "worktree",
+            "bytes_read": read_result.get("bytes_read", 0),
+            "file_size_bytes": read_result.get("file_size_bytes"),
+        }
+        return read_result
+
+    def _read_changed_untracked_text(
+        self,
+        repo: Path,
+        path: str,
+        max_chars: int,
+    ) -> dict[str, Any]:
+        candidate_result = self._untracked_preview_candidate(repo, path)
+        if candidate_result["status"] != "ok":
+            return {"status": "blocked_unsafe", "reason": candidate_result["reason"]}
+        read_result = self._read_changed_filesystem_text(
+            candidate_result["path"],
+            max_chars=max_chars,
+        )
+        if "evidence" not in read_result:
+            read_result["evidence"] = {}
+        read_result["evidence"]["untracked_read"] = {
+            "path": path,
+            "source": "untracked",
+            "bytes_read": read_result.get("bytes_read", 0),
+            "file_size_bytes": read_result.get("file_size_bytes"),
+        }
+        return read_result
+
+    def _read_changed_filesystem_text(self, path: Path, max_chars: int) -> dict[str, Any]:
+        try:
+            file_size = path.stat().st_size
+            read_size = self._changed_file_text_read_budget(max_chars, file_size)
+            with path.open("rb") as handle:
+                sample = handle.read(read_size)
+        except OSError:
+            return {"status": "blocked_unsafe", "reason": "unreadable"}
+
+        decoded = self._decode_changed_file_text_sample(
+            sample,
+            max_chars=max_chars,
+            bytes_read=len(sample),
+            file_size_bytes=file_size,
+        )
+        decoded["bytes_read"] = len(sample)
+        decoded["file_size_bytes"] = file_size
+        return decoded
+
+    def _read_changed_staged_text(
+        self,
+        repo: Path,
+        path: str,
+        max_chars: int,
+    ) -> dict[str, Any]:
+        entry_result = self._staged_index_blob_entry(repo, path)
+        if entry_result["status"] != "ok":
+            return entry_result
+
+        oid = entry_result["entry"]["oid"]
+        size_result = self._run(repo, ["git", "cat-file", "-s", oid], timeout=20, max_chars=1000)
+        evidence = {
+            "staged_ls_files": entry_result["evidence"]["staged_ls_files"],
+            "staged_cat_file_size": size_result,
+        }
+        if size_result["returncode"] != 0:
+            return {
+                "status": "blocked_git",
+                "reason": "cat_file_size_failed",
+                "evidence": evidence,
+            }
+        try:
+            blob_size = int(size_result["stdout"].strip())
+        except ValueError:
+            return {"status": "blocked_git", "reason": "invalid_blob_size", "evidence": evidence}
+
+        read_size = self._changed_file_text_read_budget(max_chars, blob_size)
+        blob_result = self._read_git_blob_prefix(repo, oid, max_bytes=read_size, blob_size=blob_size)
+        evidence["staged_cat_file_blob"] = blob_result["evidence"]
+        if blob_result["status"] != "ok":
+            return {
+                "status": "blocked_git",
+                "reason": blob_result["reason"],
+                "evidence": evidence,
+            }
+
+        decoded = self._decode_changed_file_text_sample(
+            blob_result["stdout_bytes"],
+            max_chars=max_chars,
+            bytes_read=blob_result["bytes_read"],
+            file_size_bytes=blob_size,
+        )
+        decoded["bytes_read"] = blob_result["bytes_read"]
+        decoded["file_size_bytes"] = blob_size
+        decoded["evidence"] = evidence
+        return decoded
+
+    def _staged_index_blob_entry(self, repo: Path, path: str) -> dict[str, Any]:
+        result = self._git_z_full(
+            repo,
+            ["git", "ls-files", "-s", "-z", "--", path],
+            timeout=20,
+        )
+        evidence = {"staged_ls_files": result["evidence"]}
+        if result["returncode"] != 0:
+            return {"status": "blocked_git", "reason": "ls_files_failed", "evidence": evidence}
+
+        entries = []
+        for token in [item for item in result["stdout"].split("\0") if item]:
+            metadata, separator, entry_path = token.partition("\t")
+            if not separator or entry_path != path:
+                continue
+            parts = metadata.split()
+            if len(parts) != 3:
+                return {
+                    "status": "blocked_unsafe",
+                    "reason": "invalid_index_entry",
+                    "evidence": evidence,
+                }
+            entries.append(
+                {
+                    "mode": parts[0],
+                    "oid": parts[1],
+                    "stage": parts[2],
+                    "path": entry_path,
+                }
+            )
+
+        if not entries:
+            return {"status": "blocked_no_content", "reason": "no_index_blob", "evidence": evidence}
+        if any(entry["stage"] != "0" for entry in entries):
+            return {"status": "blocked_conflict", "reason": "multi_stage_index", "evidence": evidence}
+        if len(entries) != 1:
+            return {
+                "status": "blocked_unsafe",
+                "reason": "ambiguous_index_entries",
+                "evidence": evidence,
+            }
+
+        entry = entries[0]
+        if entry["mode"] == "120000":
+            return {"status": "blocked_unsafe", "reason": "symlink", "evidence": evidence}
+        if entry["mode"] == "160000":
+            return {"status": "blocked_unsafe", "reason": "gitlink", "evidence": evidence}
+        if not entry["mode"].startswith("100"):
+            return {"status": "blocked_unsafe", "reason": "non_regular_file", "evidence": evidence}
+        return {"status": "ok", "entry": entry, "evidence": evidence}
+
+    def _read_git_blob_prefix(
+        self,
+        repo: Path,
+        oid: str,
+        *,
+        max_bytes: int,
+        blob_size: int,
+    ) -> dict[str, Any]:
+        cmd = ["git", "cat-file", "blob", oid]
+        proc: subprocess.Popen[bytes] | None = None
+        stdout_bytes = b""
+        stderr_bytes = b""
+        terminated_after_prefix = False
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                cwd=str(repo),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                shell=False,
+            )
+            if proc.stdout is not None:
+                stdout_bytes = proc.stdout.read(max_bytes)
+            if blob_size > len(stdout_bytes) and proc.poll() is None:
+                terminated_after_prefix = True
+                proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                terminated_after_prefix = True
+                proc.kill()
+                proc.wait(timeout=5)
+            if proc.stderr is not None:
+                stderr_bytes = proc.stderr.read(4096)
+        except FileNotFoundError as exc:
+            return {
+                "status": "blocked_git",
+                "reason": "git_not_found",
+                "stdout_bytes": b"",
+                "bytes_read": 0,
+                "evidence": {
+                    "cmd": cmd,
+                    "returncode": 127,
+                    "stderr": str(exc),
+                    "bytes_read": 0,
+                    "terminated_after_prefix": False,
+                },
+            }
+        finally:
+            if proc is not None:
+                if proc.stdout is not None:
+                    proc.stdout.close()
+                if proc.stderr is not None:
+                    proc.stderr.close()
+
+        returncode = proc.returncode if proc is not None and proc.returncode is not None else 0
+        evidence = {
+            "cmd": cmd,
+            "returncode": returncode,
+            "stderr": stderr_bytes.decode("utf-8", errors="replace"),
+            "bytes_read": len(stdout_bytes),
+            "blob_size_bytes": blob_size,
+            "terminated_after_prefix": terminated_after_prefix,
+        }
+        if returncode != 0 and not terminated_after_prefix:
+            return {
+                "status": "blocked_git",
+                "reason": "cat_file_blob_failed",
+                "stdout_bytes": b"",
+                "bytes_read": 0,
+                "evidence": evidence,
+            }
+        return {
+            "status": "ok",
+            "stdout_bytes": stdout_bytes,
+            "bytes_read": len(stdout_bytes),
+            "evidence": evidence,
+        }
+
+    def _decode_changed_file_text_sample(
+        self,
+        sample: bytes,
+        *,
+        max_chars: int,
+        bytes_read: int,
+        file_size_bytes: int | None,
+    ) -> dict[str, Any]:
+        if b"\0" in sample:
+            return {"status": "blocked_unsafe", "reason": "binary"}
+
+        byte_truncated = file_size_bytes is None or file_size_bytes > bytes_read
+        boundary_trimmed = False
+        try:
+            decoded = sample.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            if byte_truncated and exc.reason == "unexpected end of data":
+                try:
+                    decoded = sample[: exc.start].decode("utf-8")
+                except UnicodeDecodeError:
+                    return {"status": "blocked_unsafe", "reason": "invalid_utf8"}
+                boundary_trimmed = True
+            else:
+                return {"status": "blocked_unsafe", "reason": "invalid_utf8"}
+
+        text = decoded[:max_chars] if max_chars else ""
+        char_truncated = len(decoded) > len(text)
+        truncated = byte_truncated or boundary_trimmed or char_truncated
+        returned_bytes = len(text.encode("utf-8"))
+        omitted_bytes = (
+            max(0, file_size_bytes - returned_bytes) if file_size_bytes is not None else None
+        )
+        omitted_chars = None
+        if not byte_truncated and not boundary_trimmed:
+            omitted_chars = max(0, len(decoded) - len(text))
+
+        return {
+            "status": "ok",
+            "content": {
+                "text": text,
+                "encoding": "utf-8",
+                "chars": len(text),
+                "bytes_read": bytes_read,
+                "file_size_bytes": file_size_bytes,
+            },
+            "truncation": {
+                "truncated": truncated,
+                "chars": len(text),
+                "max_chars": max_chars,
+                "omitted_chars": omitted_chars,
+                "omitted_bytes": omitted_bytes,
+            },
+        }
 
     def _changed_file_table(
         self,

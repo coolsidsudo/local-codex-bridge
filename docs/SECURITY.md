@@ -13,7 +13,7 @@ Local Codex Bridge is project-agnostic: configured project roots are trust bound
 - Configure only the repositories you are willing to let ChatGPT/Codex work on.
 - Keep verification commands allowlisted.
 - Do not add arbitrary shell execution unless you fully understand the risk.
-- Use `get_review_package` for a compact read-only changed-file index before requesting targeted diffs.
+- Use `get_review_package` for a compact read-only changed-file index before requesting targeted diffs or text.
 - Review staged/unstaged diffs, bounded untracked previews, and verification output before accepting changes.
 - Use `git_create_work_branch` only when the configured repo is clean and the intended base branch is clear.
 - Use `git_commit_and_push` only after explicit human approval of the exact files and commit message.
@@ -65,6 +65,8 @@ ChatGPT plans/reviews
 `get_review_package` is read-only. It uses fixed git status/name-status/stat/numstat commands and existing safe untracked preview checks to report a changed-file index without full diffs or full file contents. It does not run verification commands, mutate branches, stage files, commit, push, create PRs, or touch tags/releases.
 
 `get_changed_file_diff` is read-only. It returns one bounded targeted diff for an exact changed/staged/untracked repo-relative path. It uses fixed git argv only, refuses clean/absent paths, outside-repo paths, directories, symlinks, binary or unsafe untracked files, and does not run verification commands or perform any Git/GitHub mutations.
+
+`get_changed_file_text` is read-only. It returns bounded UTF-8 text for one exact currently changed/staged/untracked repo-relative path. It is not a generic file reader: it first proves targeted changed-file state, refuses unchanged paths, deleted/no-content paths, directories, symlinks, non-regular files, binary/invalid UTF-8 content, and unsafe untracked paths, and never returns bytes or base64.
 
 Safeguards:
 

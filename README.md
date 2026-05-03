@@ -60,6 +60,7 @@ The tool surface is intentionally conservative:
 - `abort_task` — terminate a running local Codex process.
 - `get_review_package` — return a compact read-only changed-file index with status/stat evidence, without full diffs or full file contents.
 - `get_changed_file_diff` — return one bounded targeted diff for a changed/staged/untracked file after reviewing the package index.
+- `get_changed_file_text` — return bounded UTF-8 text for one changed/staged/untracked file after targeted diff review.
 - `get_git_diff` — inspect git status, unstaged/staged diffs, and bounded untracked file previews.
 - `git_get_branch_status` — report current branch, dirty state, HEAD, remotes, upstream, and ahead/behind evidence.
 - `git_create_work_branch` — create and switch to a new local work branch from an existing local base branch.
@@ -97,7 +98,7 @@ ChatGPT plans/reviews
   -> Local Codex Bridge performs controlled git add/commit/push
 ```
 
-`git_commit_and_push` should only be called after the human has reviewed the exact diff and verification evidence from `get_git_diff` and `run_verification`. For a first-pass review index, `get_review_package` reports branch/HEAD/remotes, status/stat evidence, changed-file classifications, and bounded untracked preview metadata without returning full diffs or full file contents. `get_changed_file_diff` is a read-only follow-up for one changed/staged/untracked path; it uses targeted fixed git commands, refuses unsafe paths and binary content, and bounds output. `get_git_diff` distinguishes unstaged and staged changes and includes bounded text previews for untracked files when safe. Its safeguards include:
+`git_commit_and_push` should only be called after the human has reviewed the exact diff and verification evidence from `get_git_diff` and `run_verification`. For a first-pass review index, `get_review_package` reports branch/HEAD/remotes, status/stat evidence, changed-file classifications, and bounded untracked preview metadata without returning full diffs or full file contents. `get_changed_file_diff` is a read-only follow-up for one changed/staged/untracked path; it uses targeted fixed git commands, refuses unsafe paths and binary content, and bounds output. `get_changed_file_text` is a further read-only follow-up for bounded UTF-8 content of one currently changed/staged/untracked file; it refuses unchanged paths, deleted/no-content paths, binary/invalid UTF-8 content, unsafe paths, directories, symlinks, and non-regular files. `get_git_diff` distinguishes unstaged and staged changes and includes bounded text previews for untracked files when safe. Its safeguards include:
 
 - Only configured project roots are accessible.
 - No arbitrary shell execution is exposed.
