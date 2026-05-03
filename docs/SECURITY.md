@@ -68,6 +68,8 @@ ChatGPT plans/reviews
 
 `get_changed_file_text` is read-only. It returns bounded UTF-8 text for one exact currently changed/staged/untracked repo-relative path. It is not a generic file reader: it first proves targeted changed-file state, refuses unchanged paths, deleted/no-content paths, directories, symlinks, non-regular files, binary/invalid UTF-8 content, and unsafe untracked paths, and never returns bytes or base64.
 
+`run_verification_bundle` is read-only orchestration over existing configured verification keys. It accepts command keys only, rejects unknown or invalid keys before running anything, runs the configured argv arrays sequentially with `shell=False`, and returns bounded per-command stdout/stderr evidence. It does not accept arbitrary command argv at runtime and does not perform Git/GitHub mutations, create PRs, or touch tags/releases.
+
 The optional `start_codex_task` review contract is prompt guidance only. It asks Codex to return concise implementation summaries instead of full diffs or full file contents, but it is not a security boundary and must not be trusted for enforcement. ChatGPT and the human reviewer should inspect actual repository state through Local Codex Bridge review tools and allowlisted verification before any explicit commit, push, or PR operation.
 
 Safeguards:

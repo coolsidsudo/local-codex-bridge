@@ -558,6 +558,19 @@ async def test_static_bearer_http_endpoint_rejects_unauthenticated_and_accepts_v
         "type": "boolean",
     }
     assert "get_review_package" in tool_names
+    assert "run_verification_bundle" in tool_names
+    verification_bundle = next(tool for tool in tools if tool.name == "run_verification_bundle")
+    verification_bundle_schema = getattr(verification_bundle, "parameters", None)
+    if verification_bundle_schema is None:
+        verification_bundle_schema = verification_bundle.inputSchema
+    assert verification_bundle_schema["properties"]["timeout_per_command"] == {
+        "default": 600,
+        "type": "integer",
+    }
+    assert verification_bundle_schema["properties"]["stop_on_fail"] == {
+        "default": False,
+        "type": "boolean",
+    }
     assert "get_changed_file_diff" in tool_names
     assert "get_changed_file_text" in tool_names
     assert "git_get_branch_status" in tool_names

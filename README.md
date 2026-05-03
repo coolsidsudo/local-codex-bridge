@@ -67,6 +67,7 @@ The tool surface is intentionally conservative:
 - `git_get_branch_status` — report current branch, dirty state, HEAD, remotes, upstream, and ahead/behind evidence.
 - `git_create_work_branch` — create and switch to a new local work branch from an existing local base branch.
 - `run_verification` — run an allowlisted verification command.
+- `run_verification_bundle` — run multiple existing allowlisted verification commands sequentially with bounded per-command evidence.
 - `git_commit_and_push` — after human approval, stage approved files, create one commit, and push it to the current branch on `origin`.
 - `github_create_pr` — create a GitHub pull request for an already-pushed current branch via the installed `gh` CLI.
 - `github_get_pr_status` — read GitHub pull request status/evidence via the installed `gh` CLI.
@@ -75,7 +76,7 @@ The bridge does **not** expose arbitrary shell execution in v0. Verification com
 
 The GitHub PR tools use `gh` as an external substrate. Local Codex Bridge does not implement native GitHub API/token handling and does not store, print, or manage GitHub tokens.
 
-The `start_codex_task` review contract is behavior guidance only, not a security boundary. ChatGPT should review actual repository state through `get_review_package`, `get_changed_file_diff`, `get_changed_file_text`, and `run_verification` rather than trusting pasted diffs or file contents in Codex output.
+The `start_codex_task` review contract is behavior guidance only, not a security boundary. ChatGPT should review actual repository state through `get_review_package`, `get_changed_file_diff`, `get_changed_file_text`, and `run_verification` / `run_verification_bundle` rather than trusting pasted diffs or file contents in Codex output.
 
 ## Controlled branch workflow
 
@@ -102,7 +103,7 @@ ChatGPT plans/reviews
   -> Local Codex Bridge performs controlled git add/commit/push
 ```
 
-`git_commit_and_push` should only be called after the human has reviewed the exact diff and verification evidence from `get_git_diff` and `run_verification`. For a first-pass review index, `get_review_package` reports branch/HEAD/remotes, status/stat evidence, changed-file classifications, and bounded untracked preview metadata without returning full diffs or full file contents. `get_changed_file_diff` is a read-only follow-up for one changed/staged/untracked path; it uses targeted fixed git commands, refuses unsafe paths and binary content, and bounds output. `get_changed_file_text` is a further read-only follow-up for bounded UTF-8 content of one currently changed/staged/untracked file; it refuses unchanged paths, deleted/no-content paths, binary/invalid UTF-8 content, unsafe paths, directories, symlinks, and non-regular files. `get_git_diff` distinguishes unstaged and staged changes and includes bounded text previews for untracked files when safe. Its safeguards include:
+`git_commit_and_push` should only be called after the human has reviewed the exact diff and verification evidence from `get_git_diff` and `run_verification` or `run_verification_bundle`. `run_verification_bundle` is read-only orchestration over existing configured verification keys: it accepts keys only, runs their allowlisted argv arrays sequentially with `shell=False`, and returns bounded per-command stdout/stderr evidence. For a first-pass review index, `get_review_package` reports branch/HEAD/remotes, status/stat evidence, changed-file classifications, and bounded untracked preview metadata without returning full diffs or full file contents. `get_changed_file_diff` is a read-only follow-up for one changed/staged/untracked path; it uses targeted fixed git commands, refuses unsafe paths and binary content, and bounds output. `get_changed_file_text` is a further read-only follow-up for bounded UTF-8 content of one currently changed/staged/untracked file; it refuses unchanged paths, deleted/no-content paths, binary/invalid UTF-8 content, unsafe paths, directories, symlinks, and non-regular files. `get_git_diff` distinguishes unstaged and staged changes and includes bounded text previews for untracked files when safe. Its safeguards include:
 
 - Only configured project roots are accessible.
 - No arbitrary shell execution is exposed.
@@ -438,6 +439,7 @@ get_git_diff
 git_get_branch_status
 git_create_work_branch
 run_verification
+run_verification_bundle
 git_commit_and_push
 github_create_pr
 github_get_pr_status
