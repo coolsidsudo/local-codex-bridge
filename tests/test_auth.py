@@ -549,6 +549,14 @@ async def test_static_bearer_http_endpoint_rejects_unauthenticated_and_accepts_v
 
     tool_names = {tool.name for tool in tools}
     assert "list_projects" in tool_names
+    start_codex_task = next(tool for tool in tools if tool.name == "start_codex_task")
+    start_codex_task_schema = getattr(start_codex_task, "parameters", None)
+    if start_codex_task_schema is None:
+        start_codex_task_schema = start_codex_task.inputSchema
+    assert start_codex_task_schema["properties"]["review_contract"] == {
+        "default": False,
+        "type": "boolean",
+    }
     assert "get_review_package" in tool_names
     assert "get_changed_file_diff" in tool_names
     assert "get_changed_file_text" in tool_names

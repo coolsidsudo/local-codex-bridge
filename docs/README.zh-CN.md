@@ -54,7 +54,7 @@ GitHub 或其他 VCS host
 
 - `list_projects` — 列出已配置的项目 profiles。
 - `get_project_status` — 返回项目的 git status、HEAD 和 remotes。
-- `start_codex_task` — 在已配置项目中启动 `codex exec`。
+- `start_codex_task` — 在已配置项目中启动 `codex exec`。可选的 `review_contract` 会追加 bridge 自有 guidance，要求 Codex 返回简洁实现摘要，而不是完整 diff 或完整文件内容。
 - `get_task` — 读取任务元数据和 stdout / stderr 尾部。
 - `list_tasks` — 列出最近的 bridge 任务记录。
 - `abort_task` — 终止正在运行的本地 Codex 进程。
@@ -72,6 +72,8 @@ GitHub 或其他 VCS host
 v0 不暴露任意 shell 执行。验证命令必须在每个项目 profile 中显式 allowlist。`git_create_work_branch` 和 `git_commit_and_push` 是 bridge 自有的 Git 操作，不是通用 shell 或通用文件系统工具。
 
 GitHub PR 工具把 `gh` 作为外部 substrate。Local Codex Bridge 不实现原生 GitHub API / token 处理，也不存储、打印或管理 GitHub token。
+
+`start_codex_task` 的 review contract 只是行为 guidance，不是安全边界。ChatGPT 应通过 `get_review_package`、`get_changed_file_diff`、`get_changed_file_text` 和 `run_verification` 审查真实仓库状态，而不是信任 Codex 输出中粘贴的 diff 或文件内容。
 
 ## 受控分支工作流
 
@@ -428,6 +430,8 @@ get_task
 list_tasks
 abort_task
 get_review_package
+get_changed_file_diff
+get_changed_file_text
 get_git_diff
 git_get_branch_status
 git_create_work_branch
@@ -489,8 +493,8 @@ Smoke test only. Do not edit files.
 6. 对目标项目运行 get_project_status。
 7. 运行 git_status verification。
 8. 确认 branch、HEAD、remote 和 clean worktree。
-9. 启动有边界的本地 Codex task。
-10. 审查 stdout/stderr、staged 和 unstaged git diffs、有边界的 untracked 预览，以及 verification output。
+9. 启动有边界的本地 Codex task；建议使用 `review_contract: true` 获取简洁、面向审查的输出。
+10. 审查 stdout/stderr、`get_review_package`、按需查看 targeted `get_changed_file_diff` / `get_changed_file_text` 证据，以及 verification output。
 11. 如果变更不可接受，请让 Codex 修改或停止。
 12. 如果变更可接受，明确批准精确文件列表和 commit message。
 13. 只有在人工批准后才调用 git_commit_and_push。

@@ -54,7 +54,9 @@ The tool surface is intentionally conservative:
 
 - `list_projects` — list configured project profiles.
 - `get_project_status` — report git status, HEAD, and remotes for a project.
-- `start_codex_task` — start `codex exec` in a configured project.
+- `start_codex_task` — start `codex exec` in a configured project. Optional
+  `review_contract` appends bridge-owned guidance asking Codex for concise
+  implementation summaries instead of full diffs or full file contents.
 - `get_task` — read task metadata and stdout/stderr tails.
 - `list_tasks` — list recent bridge task records.
 - `abort_task` — terminate a running local Codex process.
@@ -72,6 +74,8 @@ The tool surface is intentionally conservative:
 The bridge does **not** expose arbitrary shell execution in v0. Verification commands are allowlisted per project. `git_create_work_branch` and `git_commit_and_push` are bridge-owned Git operations, not general shell or filesystem tools.
 
 The GitHub PR tools use `gh` as an external substrate. Local Codex Bridge does not implement native GitHub API/token handling and does not store, print, or manage GitHub tokens.
+
+The `start_codex_task` review contract is behavior guidance only, not a security boundary. ChatGPT should review actual repository state through `get_review_package`, `get_changed_file_diff`, `get_changed_file_text`, and `run_verification` rather than trusting pasted diffs or file contents in Codex output.
 
 ## Controlled branch workflow
 
@@ -428,6 +432,8 @@ get_task
 list_tasks
 abort_task
 get_review_package
+get_changed_file_diff
+get_changed_file_text
 get_git_diff
 git_get_branch_status
 git_create_work_branch
@@ -489,8 +495,8 @@ Before starting real implementation work:
 6. Run get_project_status for the target project.
 7. Run git_status verification.
 8. Confirm branch, HEAD, remote, and clean worktree.
-9. Start a bounded local Codex task.
-10. Review stdout/stderr, staged and unstaged git diffs, bounded untracked previews, and verification output.
+9. Start a bounded local Codex task, preferably with `review_contract: true` for concise review-oriented output.
+10. Review stdout/stderr, `get_review_package`, targeted `get_changed_file_diff` / `get_changed_file_text` evidence as needed, and verification output.
 11. If changes are not acceptable, ask Codex to revise or stop.
 12. If changes are acceptable, explicitly approve the exact files and commit message.
 13. Call git_commit_and_push only after human approval.

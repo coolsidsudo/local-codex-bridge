@@ -39,16 +39,19 @@ def build_mcp(config: str | Path | BridgeConfig) -> FastMCP:
         prompt: str,
         model: str | None = None,
         dry_run: bool = False,
+        review_contract: bool = False,
     ) -> dict[str, Any]:
         """Start a local Codex CLI task inside a configured project.
 
         The prompt is written to a local task file and passed to `codex exec` stdin.
+        Set review_contract to append bridge-owned output guidance for review flows.
         """
         return runner.start_codex_task(
             project_id=project_id,
             prompt=prompt,
             model=model,
             dry_run=dry_run,
+            review_contract=review_contract,
         )
 
     @mcp.tool
