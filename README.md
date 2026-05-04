@@ -72,6 +72,7 @@ The tool surface is intentionally conservative:
 - `git_commit_and_push` — after human approval, stage approved files, create one commit, and push it to the current branch on `origin`.
 - `github_create_pr` — create a GitHub pull request for an already-pushed current branch via the installed `gh` CLI.
 - `github_get_pr_status` — read GitHub pull request status/evidence plus conservative advisory PR-only readiness evidence via the installed `gh` CLI.
+- `github_merge_pr` — after human approval, merge one ready GitHub pull request via fixed `gh pr merge` argv.
 - `get_pr_sync_readiness` — read-only advisory evidence combining PR readiness with local target-branch sync readiness.
 - `git_sync_local_branch_to_origin` — after review, sync a clean local target branch to its local `origin/<target>` ref without fetching, pulling, pushing, merging, or mutating PRs.
 
@@ -136,9 +137,11 @@ Safeguards:
 - PR creation is refused from the GitHub default branch or when the current branch equals the selected base branch.
 - Unpublished branches and remote SHA mismatches are refused; C2 does not add push-upstream authority.
 - If an open PR already exists for the current branch, the existing PR evidence is returned instead of creating a duplicate.
-- New PRs are drafts by default; non-draft creation is allowed, but merge and auto-merge remain out of scope.
+- New PRs are drafts by default; non-draft creation is allowed.
 
 `github_get_pr_status` includes a compact normalized `pr_readiness` section with conservative advisory PR-only evidence such as draft/open state, mergeability, review decision, checks, local branch/HEAD match, and local dirty state. `ready_to_consider_merge` is not GitHub's authoritative mergeability and is not a guarantee; missing/unknown checks, missing review decision, local branch mismatch, or local HEAD mismatch can make it false even if GitHub would allow a manual merge. It does not include target-branch sync readiness or suggested operator commands.
+
+`github_merge_pr` is a narrow execution tool for one human-approved PR merge via `gh pr merge`. It collects fresh PR evidence immediately before merging, defaults to squash merge, also supports GitHub's merge and rebase methods, always uses `--match-head-commit <fresh_head_sha>`, and may pass `--delete-branch` only when `delete_branch: true` is explicitly requested. The delete flag is gh's PR-head branch deletion behavior, not arbitrary local or remote branch cleanup. E3 is intentionally strict: it requires an open non-draft PR targeting `main`, a full PR head SHA, `APPROVED` review decision, passing checks, `MERGEABLE` / `CLEAN` mergeability, clean non-detached local state, and local branch/HEAD matching the PR head. It should normally be run from the reviewed PR head branch. It may block PRs that GitHub would allow manually, especially when `reviewDecision` is absent or unknown. It does not fetch, pull, reset, switch, locally sync, auto-merge, admin-bypass, push refs, or touch tags/releases; GitHub branch protection remains authoritative.
 
 `get_pr_sync_readiness` is a read-only follow-up for the manual PR/acceptance tail. It combines the PR readiness evidence from `github_get_pr_status` with local git evidence to report whether a PR appears ready for a human/operator to consider merging and whether a local target branch, by default `main`, appears safe to sync to `origin/<target>` using local refs only. Its combined `ready_to_consider_merge` remains conservative advisory evidence, not GitHub's authoritative mergeability or a guarantee. It does not merge, auto-merge, mutate PRs, fetch, reset, switch, pull, push, delete branches, or touch tags/releases. Suggested operator commands, when present, are advisory text only and are not executed by the bridge.
 
@@ -454,6 +457,7 @@ run_verification_bundle
 git_commit_and_push
 github_create_pr
 github_get_pr_status
+github_merge_pr
 get_pr_sync_readiness
 git_sync_local_branch_to_origin
 ```
@@ -516,8 +520,9 @@ Before starting real implementation work:
 12. If changes are acceptable, explicitly approve the exact files and commit message.
 13. Call git_commit_and_push only after human approval.
 14. Confirm the returned branch, remote, commit, push output, and final status.
-15. After PR creation and review, use get_pr_sync_readiness for conservative advisory PR merge-consideration and local target sync evidence before any merge/sync action.
-16. After the PR is merged and local refs are already current, call git_sync_local_branch_to_origin only if you want the bridge to perform the narrow local sync to `origin/<target>` using local refs only.
+15. After PR creation and review, use get_pr_sync_readiness or github_get_pr_status for conservative advisory PR merge-consideration evidence.
+16. After explicit human approval, call github_merge_pr only from the reviewed PR head branch when its strict fresh gates pass.
+17. After the PR is merged and local refs are already current, call git_sync_local_branch_to_origin only if you want the bridge to perform the narrow local sync to `origin/<target>` using local refs only.
 ```
 
 ## 15. Common issues

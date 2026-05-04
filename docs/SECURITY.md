@@ -98,7 +98,9 @@ When a failure may leave changes staged, the response reports that staged-state 
 
 ## Controlled GitHub PR tools
 
-`github_create_pr` and `github_get_pr_status` are bridge-owned GitHub PR operations backed only by the installed GitHub CLI (`gh`). They do not implement native GitHub API calls, do not manage GitHub tokens, and do not print token values. `gh` authentication remains external operator-controlled state. `github_get_pr_status` may include conservative advisory PR-only readiness evidence; `ready_to_consider_merge` is not GitHub's authoritative mergeability and is not a guarantee, and may be false for conservative/local-evidence reasons even if GitHub would allow a manual merge. This does not add merge, auto-merge, admin-bypass, PR mutation, or local sync authority.
+`github_create_pr`, `github_get_pr_status`, and `github_merge_pr` are bridge-owned GitHub PR operations backed only by the installed GitHub CLI (`gh`). They do not implement native GitHub API calls, do not manage GitHub tokens, and do not print token values. `gh` authentication remains external operator-controlled state. `github_get_pr_status` may include conservative advisory PR-only readiness evidence; `ready_to_consider_merge` is not GitHub's authoritative mergeability and is not a guarantee, and may be false for conservative/local-evidence reasons even if GitHub would allow a manual merge.
+
+`github_merge_pr` adds narrow controlled PR merge authority for one human-approved PR. It collects fresh PR evidence immediately before invoking `gh pr merge`, requires strict ready evidence, passes `--match-head-commit` with the fresh PR head SHA, defaults to squash merge, and can optionally pass gh's PR-head `--delete-branch` flag only when explicitly requested. It is not auto-merge, not admin bypass, not a broad `gh` passthrough, not local sync, not arbitrary branch cleanup, and not tag/release authority. It does not fetch, pull, reset, switch, push arbitrary refs, delete arbitrary branches, create tags, move tags, or create releases. GitHub branch protection remains authoritative and may still refuse a merge.
 
 `get_pr_sync_readiness` is read-only evidence for the manual PR/acceptance tail. It combines PR readiness with local sync readiness, reporting whether a PR appears ready for a human/operator to consider merging and whether a local target branch appears safe to sync to `origin/<target>` using local refs only. Its readiness remains conservative advisory evidence, not GitHub's authoritative mergeability or a guarantee. It does not merge, auto-merge, admin-bypass, mutate PRs, fetch, reset, switch, pull, push, delete branches, or touch tags/releases. Suggested operator commands, when returned, are advisory text only and are not executed by the bridge.
 
@@ -110,13 +112,15 @@ Safeguards:
 - The `origin` remote must be a supported public `github.com` HTTPS or SSH URL. Non-GitHub remotes fail closed with structured `blocked_remote` evidence.
 - `gh --version` and `gh auth status -h github.com` must succeed before GitHub PR operations.
 - `github_create_pr` requires a normal local branch, refuses detached HEAD, and requires a clean worktree.
+- `github_merge_pr` requires a clean, non-detached local repo and normally must be run from the reviewed PR head branch whose local HEAD matches the fresh PR head SHA.
 - The current branch must already exist on `origin` at the exact local `HEAD`; unpublished branches and remote SHA mismatches are refused.
 - C2 intentionally does not add push-upstream authority. Pushing an unpublished branch would require a separate, explicit controlled Git slice.
 - If `base_branch` is omitted, the GitHub default branch is read through `gh repo view`; no universal `main` base is hard-coded.
 - Explicit base branches are conservatively validated and must exist on `origin`.
 - PR creation is refused from the GitHub default branch and when the current branch equals the selected base branch.
 - Existing open PRs for the current branch are returned as evidence instead of creating duplicates.
-- Draft PRs are the default. Non-draft creation is allowed, but merge, auto-merge, admin bypass, and release/tag operations are not exposed.
+- Draft PRs are the default. Non-draft creation is allowed. Merge execution is separate and remains blocked for draft PRs, missing or non-approved review decisions, non-passing checks, unclean mergeability evidence, or stale local evidence.
+- Auto-merge, admin bypass, generic `gh` passthrough, local sync, fetch/pull/reset/switch, arbitrary branch deletion, and release/tag operations are not exposed by PR tools.
 
 ## Tunnels and platform gating
 
@@ -133,4 +137,4 @@ ChatGPT-side developer MCP errors such as `FORBIDDEN: This conversation does not
 - No streaming live logs; polling is supported.
 - Branch creation is local-only and refuses dirty or detached state.
 - Remote selection for `git_commit_and_push` is currently constrained to `origin`.
-- GitHub PR creation/status requires `gh` and supports public `github.com` remotes only; no merge or push-upstream tool is included.
+- GitHub PR create/status/merge requires `gh` and supports public `github.com` remotes only; no push-upstream tool is included.

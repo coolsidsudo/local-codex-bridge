@@ -70,6 +70,7 @@ GitHub 或其他 VCS host
 - `git_commit_and_push` — 在人工批准后，stage 已批准文件、创建一个 commit，并 push 到 `origin` 上的当前分支。
 - `github_create_pr` — 通过已安装的 `gh` CLI，为已经 push 的当前分支创建 GitHub pull request。
 - `github_get_pr_status` — 通过已安装的 `gh` CLI 读取 GitHub pull request 状态、证据和保守 advisory 的 PR-only readiness 证据。
+- `github_merge_pr` — 在人工批准后，通过固定 `gh pr merge` argv merge 单个 ready 的 GitHub pull request。
 - `get_pr_sync_readiness` — 只读报告把 PR readiness 与本地目标分支 sync readiness 结合后的 advisory 证据。
 - `git_sync_local_branch_to_origin` — 审查后把干净的本地目标分支同步到本地 `origin/<target>` ref；不 fetch、pull、push、merge 或修改 PR。
 
@@ -134,9 +135,11 @@ ChatGPT 规划 / 审查
 - 如果当前分支是 GitHub 默认分支，或当前分支等于选定 base 分支，则拒绝创建 PR。
 - 未发布分支和 remote SHA 不匹配会被拒绝；C2 不增加 push-upstream 权限。
 - 如果当前分支已有 open PR，则返回已有 PR 证据，不创建重复 PR。
-- 新 PR 默认是 draft；允许创建非 draft PR，但 merge 和 auto-merge 仍不在范围内。
+- 新 PR 默认是 draft；允许创建非 draft PR。
 
 `github_get_pr_status` 包含紧凑的规范化 `pr_readiness` 区块，提供保守 advisory 的 PR-only 证据，例如 draft/open 状态、mergeability、review decision、checks、本地 branch/HEAD 是否匹配，以及本地 dirty 状态。`ready_to_consider_merge` 不是 GitHub 的权威 mergeability，也不是保证；checks missing/unknown、缺少 review decision、本地分支不匹配或本地 HEAD 不匹配，都可能让 readiness 为 false，即使 GitHub 允许人工 merge。它不包含目标分支 sync readiness，也不返回建议 operator commands。
+
+`github_merge_pr` 是一个窄执行工具，用于通过 `gh pr merge` merge 单个已经人工批准的 PR。它会在 merge 前立即收集新的 PR 证据，默认使用 squash merge，也支持 GitHub 的 merge 和 rebase 方式，始终使用 `--match-head-commit <fresh_head_sha>`；只有在显式设置 `delete_branch: true` 时才会传入 `--delete-branch`。这个删除标志只表示 gh 的 PR head branch 删除行为，不是任意本地或远端分支清理。E3 故意严格：它要求 PR open、非 draft、目标为 `main`、有完整 PR head SHA、review decision 为 `APPROVED`、checks 通过、mergeability 为 `MERGEABLE` / `CLEAN`、本地状态 clean 且非 detached，并且本地 branch/HEAD 匹配 PR head。通常应在已经审查过的 PR head branch 上运行。它可能会阻止 GitHub 手动界面允许 merge 的 PR，尤其是在 `reviewDecision` 缺失或未知时。它不会 fetch、pull、reset、switch、本地 sync、auto-merge、admin-bypass、push refs，或触碰 tags/releases；GitHub branch protection 仍然是权威。
 
 `get_pr_sync_readiness` 是人工 PR / acceptance 尾部流程的只读 follow-up。它把 `github_get_pr_status` 的 PR readiness 证据和本地 git 证据合并，报告 PR 是否看起来可供人工/operator 考虑 merge，以及本地目标分支（默认 `main`）是否基于本地 refs 看起来可以同步到 `origin/<target>`。其合并后的 `ready_to_consider_merge` 仍是保守 advisory 证据，不是 GitHub 的权威 mergeability，也不是保证。它不会 merge、auto-merge、修改 PR、fetch、reset、switch、pull、push、删除分支，或触碰 tags/releases。返回的 operator commands（如果有）只是建议文本，bridge 不会执行它们。
 
@@ -452,6 +455,7 @@ run_verification_bundle
 git_commit_and_push
 github_create_pr
 github_get_pr_status
+github_merge_pr
 get_pr_sync_readiness
 git_sync_local_branch_to_origin
 ```
@@ -514,8 +518,9 @@ Smoke test only. Do not edit files.
 12. 如果变更可接受，明确批准精确文件列表和 commit message。
 13. 只有在人工批准后才调用 git_commit_and_push。
 14. 确认返回的 branch、remote、commit、push output 和 final status。
-15. PR 创建并审查后，使用 get_pr_sync_readiness 获取保守 advisory 的 PR merge-consideration 和本地目标分支 sync 证据，再执行任何 merge/sync 动作。
-16. PR 已 merge 且本地 refs 已经是最新之后，只有在希望 bridge 执行基于本地 refs 的窄本地同步时，才调用 git_sync_local_branch_to_origin。
+15. PR 创建并审查后，使用 get_pr_sync_readiness 或 github_get_pr_status 获取保守 advisory 的 PR merge-consideration 证据。
+16. 明确人工批准后，只有在严格 fresh gate 通过且位于已审查 PR head branch 时，才调用 github_merge_pr。
+17. PR 已 merge 且本地 refs 已经是最新之后，只有在希望 bridge 执行基于本地 refs 的窄本地同步时，才调用 git_sync_local_branch_to_origin。
 ```
 
 ## 15. 常见问题

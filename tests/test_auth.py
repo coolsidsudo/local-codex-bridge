@@ -586,6 +586,20 @@ async def test_static_bearer_http_endpoint_rejects_unauthenticated_and_accepts_v
     }
     assert "github_create_pr" in tool_names
     assert "github_get_pr_status" in tool_names
+    assert "github_merge_pr" in tool_names
+    github_merge_pr = next(tool for tool in tools if tool.name == "github_merge_pr")
+    github_merge_pr_schema = getattr(github_merge_pr, "parameters", None)
+    if github_merge_pr_schema is None:
+        github_merge_pr_schema = github_merge_pr.inputSchema
+    assert github_merge_pr_schema["properties"]["merge_method"] == {
+        "default": "squash",
+        "type": "string",
+    }
+    assert github_merge_pr_schema["properties"]["delete_branch"] == {
+        "default": False,
+        "type": "boolean",
+    }
+    assert github_merge_pr_schema["properties"]["expected_head_sha"]["default"] is None
     assert "get_pr_sync_readiness" in tool_names
     pr_sync_readiness = next(tool for tool in tools if tool.name == "get_pr_sync_readiness")
     pr_sync_readiness_schema = getattr(pr_sync_readiness, "parameters", None)
