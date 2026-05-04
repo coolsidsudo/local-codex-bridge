@@ -27,14 +27,14 @@ REVIEW_CONTRACT_FOOTER = f"""---
 
 Follow this contract for this local Codex task:
 - Implement only the requested bounded slice; do not broaden scope.
-- Do not commit, push, create a PR, or touch tags/releases.
+- Do not commit, push, create a PR, merge, or touch tags/releases.
 - Do not paste full diffs or full file contents in your final response.
 - Return a concise implementation summary.
 - List changed files.
 - List exact verification commands run and their results.
 - List risks, deviations, or follow-up needs.
-- Confirm no commit, push, PR, tag, or release work was performed.
-- ChatGPT will inspect actual repository state through Local Codex Bridge review tools, not from pasted diffs: `get_review_package`, `get_changed_file_diff`, `get_changed_file_text`, and `run_verification`.
+- Confirm no commit, push, PR, merge, tag, or release work was performed.
+- ChatGPT/human reviewers will inspect actual repository state, verification evidence, and readiness evidence through Local Codex Bridge tools rather than trusting Codex summaries.
 """
 REVIEW_PACKAGE_UNTRACKED_EXCERPT_MAX_CHARS = 1000
 BRANCH_NAME_MAX_CHARS = 200
