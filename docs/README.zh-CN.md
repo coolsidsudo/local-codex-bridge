@@ -66,18 +66,18 @@ GitHub 或其他 VCS host
 - `git_create_work_branch` — 基于已有本地 base 分支创建并切换到新的本地工作分支。
 - `get_acceptance_readiness` — 只读预检当前 repo 状态是否看起来可以执行人工批准的 `git_commit_and_push`。
 - `run_verification` — 运行项目配置中 allowlist 的验证命令。
-- `run_verification_bundle` — 按顺序运行多个已有 allowlist 验证命令，并返回有边界的逐命令证据。
+- `run_verification_bundle` — 按顺序运行多个已配置的验证 key，并返回有边界的逐命令证据。
 - `git_commit_and_push` — 在人工批准后，stage 已批准文件、创建一个 commit，并 push 到 `origin` 上的当前分支。
 - `github_create_pr` — 通过已安装的 `gh` CLI，为已经 push 的当前分支创建 GitHub pull request。
-- `github_get_pr_status` — 通过已安装的 `gh` CLI 读取 GitHub pull request 状态、证据和规范化的只读 PR readiness 证据。
-- `get_pr_sync_readiness` — 只读报告 PR 是否可供人工考虑 merge，以及本地目标分支是否可同步。
+- `github_get_pr_status` — 通过已安装的 `gh` CLI 读取 GitHub pull request 状态、证据和保守 advisory 的 PR-only readiness 证据。
+- `get_pr_sync_readiness` — 只读报告把 PR readiness 与本地目标分支 sync readiness 结合后的 advisory 证据。
 - `git_sync_local_branch_to_origin` — 审查后把干净的本地目标分支同步到本地 `origin/<target>` ref；不 fetch、pull、push、merge 或修改 PR。
 
 v0 不暴露任意 shell 执行。验证命令必须在每个项目 profile 中显式 allowlist。`git_create_work_branch` 和 `git_commit_and_push` 是 bridge 自有的 Git 操作，不是通用 shell 或通用文件系统工具。
 
 GitHub PR 工具把 `gh` 作为外部 substrate。Local Codex Bridge 不实现原生 GitHub API / token 处理，也不存储、打印或管理 GitHub token。
 
-`start_codex_task` 的 review contract 只是行为 guidance，不是安全边界。ChatGPT 应通过 `get_review_package`、`get_changed_file_diff`、`get_changed_file_text` 和 `run_verification` / `run_verification_bundle` 审查真实仓库状态，而不是信任 Codex 输出中粘贴的 diff 或文件内容。
+`start_codex_task` 的 review contract 只是行为 guidance，不是安全边界。ChatGPT 和人工 reviewer 应通过 Local Codex Bridge 工具检查真实仓库状态、验证证据和 readiness 证据，而不是信任 Codex summary、粘贴的 diff 或粘贴的文件内容。
 
 ## 受控分支工作流
 
@@ -105,7 +105,7 @@ ChatGPT 规划 / 审查
   -> Local Codex Bridge 执行受控 git add/commit/push
 ```
 
-只有在人工已经审查来自 `get_git_diff` 和 `run_verification` 或 `run_verification_bundle` 的精确 diff 和验证证据后，才应调用 `git_commit_and_push`。`get_acceptance_readiness` 是针对已批准文件集合的只读预检：它报告当前 branch/HEAD/remotes、staged/unstaged/untracked 文件、approved-file 覆盖情况、可用的 origin/upstream 证据，以及 `git_commit_and_push` 是否可能被阻止。它不会 stage、commit、push、fetch、修改分支、创建 PR，或触碰 tags/releases。`run_verification_bundle` 是对已有配置验证 key 的只读编排：它只接受 key，按顺序运行其 allowlist argv 数组并使用 `shell=False`，返回有边界的逐命令 stdout/stderr 证据。作为第一步审查索引，`get_review_package` 会返回 branch/HEAD/remotes、status/stat 证据、变更文件分类和有边界的 untracked 预览元数据，但不返回完整 diff 或完整文件内容。`get_changed_file_diff` 是只读 follow-up，用于单个 changed/staged/untracked 路径；它使用 targeted fixed git commands，拒绝 unsafe path 和 binary content，并限制输出大小。`get_changed_file_text` 是进一步的只读 follow-up，用于单个当前 changed/staged/untracked 文件的有边界 UTF-8 内容；它会拒绝 unchanged path、deleted/no-content path、binary/invalid UTF-8、unsafe path、目录、symlink 和非普通文件。`get_git_diff` 会区分 unstaged 和 staged 变更，并在安全时包含有边界的 untracked 文本预览。它的安全措施包括：
+只有在人工已经审查来自 `get_git_diff` 和 `run_verification` 或 `run_verification_bundle` 的精确 diff 和验证证据后，才应调用 `git_commit_and_push`。`get_acceptance_readiness` 是针对已批准文件集合的只读预检：它报告当前 branch/HEAD/remotes、staged/unstaged/untracked 文件、approved-file 覆盖情况、可用的 origin/upstream 证据，以及 `git_commit_and_push` 是否可能被阻止。它不会 stage、commit、push、fetch、修改分支、创建 PR，或触碰 tags/releases。`run_verification_bundle` 只接受已配置的验证 key，按顺序运行其固定 allowlist argv 数组并使用 `shell=False`，返回有边界的逐命令 stdout/stderr 证据；bundle 编排本身不会增加 Git/GitHub/PR/tag/release 修改权限，但实际副作用取决于被配置的 allowlist 命令，因此如果 operator 想要只读验证语义，应把验证 key 配置为只读命令。作为第一步审查索引，`get_review_package` 会返回 branch/HEAD/remotes、status/stat 证据、变更文件分类和有边界的 untracked 预览元数据，但不返回完整 diff 或完整文件内容。`get_changed_file_diff` 是只读 follow-up，用于单个 changed/staged/untracked 路径；它使用 targeted fixed git commands，拒绝 unsafe path 和 binary content，并限制输出大小。`get_changed_file_text` 是进一步的只读 follow-up，用于单个当前 changed/staged/untracked 文件的有边界 UTF-8 内容；它会拒绝 unchanged path、deleted/no-content path、binary/invalid UTF-8、unsafe path、目录、symlink 和非普通文件。`get_git_diff` 会区分 unstaged 和 staged 变更，并在安全时包含有边界的 untracked 文本预览。它的安全措施包括：
 
 - 只能访问已配置项目根目录。
 - 不暴露任意 shell 执行。
@@ -136,9 +136,9 @@ ChatGPT 规划 / 审查
 - 如果当前分支已有 open PR，则返回已有 PR 证据，不创建重复 PR。
 - 新 PR 默认是 draft；允许创建非 draft PR，但 merge 和 auto-merge 仍不在范围内。
 
-`github_get_pr_status` 包含紧凑的规范化 `pr_readiness` 区块，提供 advisory、只读的 PR 证据，例如 draft/open 状态、mergeability、review decision、checks、本地 branch/HEAD 是否匹配，以及本地 dirty 状态。它不包含目标分支 sync readiness，也不返回建议 operator commands。
+`github_get_pr_status` 包含紧凑的规范化 `pr_readiness` 区块，提供保守 advisory 的 PR-only 证据，例如 draft/open 状态、mergeability、review decision、checks、本地 branch/HEAD 是否匹配，以及本地 dirty 状态。`ready_to_consider_merge` 不是 GitHub 的权威 mergeability，也不是保证；checks missing/unknown、缺少 review decision、本地分支不匹配或本地 HEAD 不匹配，都可能让 readiness 为 false，即使 GitHub 允许人工 merge。它不包含目标分支 sync readiness，也不返回建议 operator commands。
 
-`get_pr_sync_readiness` 是人工 PR / acceptance 尾部流程的只读 follow-up。它把 `gh` PR 证据和本地 git 证据合并，报告 PR 是否看起来可供人工/operator 考虑 merge，以及本地目标分支（默认 `main`）是否基于本地 refs 看起来可以同步到 `origin/<target>`。它不会 merge、auto-merge、修改 PR、fetch、reset、switch、pull、push、删除分支，或触碰 tags/releases。返回的 operator commands（如果有）只是建议文本，bridge 不会执行它们。
+`get_pr_sync_readiness` 是人工 PR / acceptance 尾部流程的只读 follow-up。它把 `github_get_pr_status` 的 PR readiness 证据和本地 git 证据合并，报告 PR 是否看起来可供人工/operator 考虑 merge，以及本地目标分支（默认 `main`）是否基于本地 refs 看起来可以同步到 `origin/<target>`。其合并后的 `ready_to_consider_merge` 仍是保守 advisory 证据，不是 GitHub 的权威 mergeability，也不是保证。它不会 merge、auto-merge、修改 PR、fetch、reset、switch、pull、push、删除分支，或触碰 tags/releases。返回的 operator commands（如果有）只是建议文本，bridge 不会执行它们。
 
 `git_sync_local_branch_to_origin` 是 post-merge 本地 sync 尾部流程的窄执行工具。它只使用本地 refs，拒绝 dirty、detached、ahead 或 diverged 状态；当目标分支已经等于 `origin/<target>` 时返回 `ok_noop` 且不切换分支；只有在所有 gate 通过后的 behind 状态下，才可以运行固定 argv：`git switch <target>` 和 `git reset --hard origin/<target>`。它不会 fetch、pull、push、merge、修改 PR、删除分支，或触碰 tags/releases。
 
@@ -514,7 +514,7 @@ Smoke test only. Do not edit files.
 12. 如果变更可接受，明确批准精确文件列表和 commit message。
 13. 只有在人工批准后才调用 git_commit_and_push。
 14. 确认返回的 branch、remote、commit、push output 和 final status。
-15. PR 创建并审查后，使用 get_pr_sync_readiness 获取只读的 PR merge-consideration 和本地目标分支 sync 证据，再执行任何 merge/sync 动作。
+15. PR 创建并审查后，使用 get_pr_sync_readiness 获取保守 advisory 的 PR merge-consideration 和本地目标分支 sync 证据，再执行任何 merge/sync 动作。
 16. PR 已 merge 且本地 refs 已经是最新之后，只有在希望 bridge 执行基于本地 refs 的窄本地同步时，才调用 git_sync_local_branch_to_origin。
 ```
 

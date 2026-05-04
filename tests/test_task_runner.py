@@ -279,6 +279,17 @@ def test_start_codex_task_dry_run_with_review_contract_appends_footer(
     assert prompt.startswith("Implement the thing.\n\n---\n")
     assert REVIEW_CONTRACT_MARKER in prompt
     assert "Do not paste full diffs or full file contents" in prompt
+    assert "Do not commit, push, create a PR, merge, or touch tags/releases" in prompt
+    assert (
+        "Confirm no commit, push, PR, merge, tag, or release work was performed"
+        in prompt
+    )
+    assert "repository state, verification evidence, and readiness evidence" in prompt
+    assert "through Local Codex Bridge tools" in prompt
+    assert "rather than trusting Codex summaries" in prompt
+    assert "`get_review_package`, `get_changed_file_diff`" not in prompt
+    assert "`get_changed_file_text`" not in prompt
+    assert "`run_verification`" not in prompt
     assert meta["review_contract_requested"] is True
     assert meta["review_contract_version"] == REVIEW_CONTRACT_VERSION
     assert meta["review_contract_footer_appended"] is True

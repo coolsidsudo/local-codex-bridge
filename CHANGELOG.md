@@ -7,12 +7,12 @@
 - `get_review_package` MCP tool for a compact read-only changed-file review index without full diffs or full file contents.
 - `get_changed_file_diff` MCP tool for one bounded targeted changed-file diff with staged, unstaged, untracked, and auto source modes.
 - `get_changed_file_text` MCP tool for bounded UTF-8 text from one currently changed/staged/untracked file.
-- `run_verification_bundle` MCP tool for sequential read-only orchestration over existing allowlisted verification commands with bounded per-command evidence.
+- `run_verification_bundle` MCP tool for sequential execution of configured verification keys with bounded per-command evidence; runtime argv remains fixed and allowlisted, while command side effects are those configured by the operator.
 - `get_acceptance_readiness` MCP tool for read-only preflight evidence before a human-approved `git_commit_and_push`.
-- `get_pr_sync_readiness` MCP tool for read-only PR merge-consideration and local target-branch sync readiness evidence.
+- `get_pr_sync_readiness` MCP tool for conservative advisory PR merge-consideration and local target-branch sync readiness evidence.
 - `git_sync_local_branch_to_origin` MCP tool for narrow post-merge local target-branch sync to local `origin/<target>` refs.
 - Optional `start_codex_task` review contract guidance for concise Codex implementation summaries.
-- Normalized read-only PR readiness evidence in `github_get_pr_status`.
+- Normalized conservative advisory PR-only readiness evidence in `github_get_pr_status`.
 
 ## [0.2.0] - 2026-05-02
 

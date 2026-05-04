@@ -68,18 +68,18 @@ The tool surface is intentionally conservative:
 - `git_create_work_branch` — create and switch to a new local work branch from an existing local base branch.
 - `get_acceptance_readiness` — read-only preflight for whether the current repo state appears ready for a human-approved `git_commit_and_push`.
 - `run_verification` — run an allowlisted verification command.
-- `run_verification_bundle` — run multiple existing allowlisted verification commands sequentially with bounded per-command evidence.
+- `run_verification_bundle` — run multiple configured verification keys sequentially with bounded per-command evidence.
 - `git_commit_and_push` — after human approval, stage approved files, create one commit, and push it to the current branch on `origin`.
 - `github_create_pr` — create a GitHub pull request for an already-pushed current branch via the installed `gh` CLI.
-- `github_get_pr_status` — read GitHub pull request status/evidence plus normalized read-only PR readiness evidence via the installed `gh` CLI.
-- `get_pr_sync_readiness` — read-only evidence for PR merge consideration and local target-branch sync readiness.
+- `github_get_pr_status` — read GitHub pull request status/evidence plus conservative advisory PR-only readiness evidence via the installed `gh` CLI.
+- `get_pr_sync_readiness` — read-only advisory evidence combining PR readiness with local target-branch sync readiness.
 - `git_sync_local_branch_to_origin` — after review, sync a clean local target branch to its local `origin/<target>` ref without fetching, pulling, pushing, merging, or mutating PRs.
 
 The bridge does **not** expose arbitrary shell execution in v0. Verification commands are allowlisted per project. `git_create_work_branch` and `git_commit_and_push` are bridge-owned Git operations, not general shell or filesystem tools.
 
 The GitHub PR tools use `gh` as an external substrate. Local Codex Bridge does not implement native GitHub API/token handling and does not store, print, or manage GitHub tokens.
 
-The `start_codex_task` review contract is behavior guidance only, not a security boundary. ChatGPT should review actual repository state through `get_review_package`, `get_changed_file_diff`, `get_changed_file_text`, and `run_verification` / `run_verification_bundle` rather than trusting pasted diffs or file contents in Codex output.
+The `start_codex_task` review contract is behavior guidance only, not a security boundary. ChatGPT and human reviewers should inspect actual repository state, verification evidence, and readiness evidence through Local Codex Bridge tools rather than trusting Codex summaries, pasted diffs, or pasted file contents.
 
 ## Controlled branch workflow
 
@@ -107,7 +107,7 @@ ChatGPT plans/reviews
   -> Local Codex Bridge performs controlled git add/commit/push
 ```
 
-`git_commit_and_push` should only be called after the human has reviewed the exact diff and verification evidence from `get_git_diff` and `run_verification` or `run_verification_bundle`. `get_acceptance_readiness` is a read-only preflight for the approved file set: it reports current branch/HEAD/remotes, staged/unstaged/untracked files, approved-file coverage, origin/upstream evidence when available, and whether `git_commit_and_push` would likely block. It does not stage, commit, push, fetch, mutate branches, create PRs, or touch tags/releases. `run_verification_bundle` is read-only orchestration over existing configured verification keys: it accepts keys only, runs their allowlisted argv arrays sequentially with `shell=False`, and returns bounded per-command stdout/stderr evidence. For a first-pass review index, `get_review_package` reports branch/HEAD/remotes, status/stat evidence, changed-file classifications, and bounded untracked preview metadata without returning full diffs or full file contents. `get_changed_file_diff` is a read-only follow-up for one changed/staged/untracked path; it uses targeted fixed git commands, refuses unsafe paths and binary content, and bounds output. `get_changed_file_text` is a further read-only follow-up for bounded UTF-8 content of one currently changed/staged/untracked file; it refuses unchanged paths, deleted/no-content paths, binary/invalid UTF-8 content, unsafe paths, directories, symlinks, and non-regular files. `get_git_diff` distinguishes unstaged and staged changes and includes bounded text previews for untracked files when safe. Its safeguards include:
+`git_commit_and_push` should only be called after the human has reviewed the exact diff and verification evidence from `get_git_diff` and `run_verification` or `run_verification_bundle`. `get_acceptance_readiness` is a read-only preflight for the approved file set: it reports current branch/HEAD/remotes, staged/unstaged/untracked files, approved-file coverage, origin/upstream evidence when available, and whether `git_commit_and_push` would likely block. It does not stage, commit, push, fetch, mutate branches, create PRs, or touch tags/releases. `run_verification_bundle` accepts configured verification keys only, runs their fixed allowlisted argv arrays sequentially with `shell=False`, and returns bounded per-command stdout/stderr evidence; the bundle orchestration adds no Git/GitHub/PR/tag/release mutation authority, but actual side effects are those of the configured allowlisted commands, so operators should configure verification keys as read-only commands when they want read-only verification semantics. For a first-pass review index, `get_review_package` reports branch/HEAD/remotes, status/stat evidence, changed-file classifications, and bounded untracked preview metadata without returning full diffs or full file contents. `get_changed_file_diff` is a read-only follow-up for one changed/staged/untracked path; it uses targeted fixed git commands, refuses unsafe paths and binary content, and bounds output. `get_changed_file_text` is a further read-only follow-up for bounded UTF-8 content of one currently changed/staged/untracked file; it refuses unchanged paths, deleted/no-content paths, binary/invalid UTF-8 content, unsafe paths, directories, symlinks, and non-regular files. `get_git_diff` distinguishes unstaged and staged changes and includes bounded text previews for untracked files when safe. Its safeguards include:
 
 - Only configured project roots are accessible.
 - No arbitrary shell execution is exposed.
@@ -138,9 +138,9 @@ Safeguards:
 - If an open PR already exists for the current branch, the existing PR evidence is returned instead of creating a duplicate.
 - New PRs are drafts by default; non-draft creation is allowed, but merge and auto-merge remain out of scope.
 
-`github_get_pr_status` includes a compact normalized `pr_readiness` section with advisory, read-only PR evidence such as draft/open state, mergeability, review decision, checks, local branch/HEAD match, and local dirty state. It does not include target-branch sync readiness or suggested operator commands.
+`github_get_pr_status` includes a compact normalized `pr_readiness` section with conservative advisory PR-only evidence such as draft/open state, mergeability, review decision, checks, local branch/HEAD match, and local dirty state. `ready_to_consider_merge` is not GitHub's authoritative mergeability and is not a guarantee; missing/unknown checks, missing review decision, local branch mismatch, or local HEAD mismatch can make it false even if GitHub would allow a manual merge. It does not include target-branch sync readiness or suggested operator commands.
 
-`get_pr_sync_readiness` is a read-only follow-up for the manual PR/acceptance tail. It combines `gh` PR evidence with local git evidence to report whether a PR appears ready for a human/operator to consider merging and whether a local target branch, by default `main`, appears safe to sync to `origin/<target>` using local refs only. It does not merge, auto-merge, mutate PRs, fetch, reset, switch, pull, push, delete branches, or touch tags/releases. Suggested operator commands, when present, are advisory text only and are not executed by the bridge.
+`get_pr_sync_readiness` is a read-only follow-up for the manual PR/acceptance tail. It combines the PR readiness evidence from `github_get_pr_status` with local git evidence to report whether a PR appears ready for a human/operator to consider merging and whether a local target branch, by default `main`, appears safe to sync to `origin/<target>` using local refs only. Its combined `ready_to_consider_merge` remains conservative advisory evidence, not GitHub's authoritative mergeability or a guarantee. It does not merge, auto-merge, mutate PRs, fetch, reset, switch, pull, push, delete branches, or touch tags/releases. Suggested operator commands, when present, are advisory text only and are not executed by the bridge.
 
 `git_sync_local_branch_to_origin` is the narrow execution counterpart for the post-merge local sync tail. It uses local refs only, refuses dirty/detached/ahead/diverged state, returns `ok_noop` without switching branches when the target already equals `origin/<target>`, and only for behind-state sync after all gates pass may run fixed `git switch <target>` and `git reset --hard origin/<target>` argv. It does not fetch, pull, push, merge, mutate PRs, delete branches, or touch tags/releases.
 
@@ -516,7 +516,7 @@ Before starting real implementation work:
 12. If changes are acceptable, explicitly approve the exact files and commit message.
 13. Call git_commit_and_push only after human approval.
 14. Confirm the returned branch, remote, commit, push output, and final status.
-15. After PR creation and review, use get_pr_sync_readiness for read-only PR merge-consideration and local target sync evidence before any merge/sync action.
+15. After PR creation and review, use get_pr_sync_readiness for conservative advisory PR merge-consideration and local target sync evidence before any merge/sync action.
 16. After the PR is merged and local refs are already current, call git_sync_local_branch_to_origin only if you want the bridge to perform the narrow local sync to `origin/<target>` using local refs only.
 ```
 
