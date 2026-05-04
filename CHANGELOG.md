@@ -9,6 +9,7 @@
 - `get_changed_file_text` MCP tool for bounded UTF-8 text from one currently changed/staged/untracked file.
 - `run_verification_bundle` MCP tool for sequential read-only orchestration over existing allowlisted verification commands with bounded per-command evidence.
 - `get_acceptance_readiness` MCP tool for read-only preflight evidence before a human-approved `git_commit_and_push`.
+- `get_pr_sync_readiness` MCP tool for read-only PR merge-consideration and local target-branch sync readiness evidence.
 - Optional `start_codex_task` review contract guidance for concise Codex implementation summaries.
 
 ## [0.2.0] - 2026-05-02

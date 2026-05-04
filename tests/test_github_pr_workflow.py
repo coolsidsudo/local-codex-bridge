@@ -87,19 +87,30 @@ scenario = os.environ.get("LCB_FAKE_GH_SCENARIO", "")
 default_branch = os.environ.get("LCB_FAKE_GH_DEFAULT_BRANCH", "main")
 existing = os.environ.get("LCB_FAKE_GH_EXISTING_PR", "0") == "1"
 repo = "coolsidsudo/local-codex-bridge"
+checks = os.environ.get("LCB_FAKE_GH_CHECKS", "missing")
+if checks == "passing":
+    status_check_rollup = [{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}]
+elif checks == "failing":
+    status_check_rollup = [{"name": "ci", "status": "COMPLETED", "conclusion": "FAILURE"}]
+elif checks == "pending":
+    status_check_rollup = [{"name": "ci", "status": "IN_PROGRESS", "conclusion": None}]
+elif checks == "unknown":
+    status_check_rollup = [{"name": "ci"}]
+else:
+    status_check_rollup = []
 pr = {
     "number": 123,
     "url": "https://github.com/coolsidsudo/local-codex-bridge/pull/123",
     "title": "Test PR",
-    "state": "OPEN",
-    "isDraft": True,
-    "baseRefName": default_branch,
-    "headRefName": "feature",
-    "headRefOid": "abc123",
-    "mergeable": "UNKNOWN",
-    "mergeStateStatus": "UNKNOWN",
-    "reviewDecision": "",
-    "statusCheckRollup": [],
+    "state": os.environ.get("LCB_FAKE_GH_PR_STATE", "OPEN"),
+    "isDraft": os.environ.get("LCB_FAKE_GH_PR_DRAFT", "1") == "1",
+    "baseRefName": os.environ.get("LCB_FAKE_GH_BASE", default_branch),
+    "headRefName": os.environ.get("LCB_FAKE_GH_HEAD_BRANCH", "feature"),
+    "headRefOid": os.environ.get("LCB_FAKE_GH_HEAD_SHA", "abc123"),
+    "mergeable": os.environ.get("LCB_FAKE_GH_MERGEABLE", "UNKNOWN"),
+    "mergeStateStatus": os.environ.get("LCB_FAKE_GH_MERGE_STATE", "UNKNOWN"),
+    "reviewDecision": os.environ.get("LCB_FAKE_GH_REVIEW_DECISION", ""),
+    "statusCheckRollup": status_check_rollup,
     "updatedAt": "2026-05-02T00:00:00Z",
 }
 if args == ["--version"]:
@@ -175,6 +186,43 @@ def gh_log(log_path: Path) -> list[list[str]]:
     if not log_path.exists():
         return []
     return [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+
+
+def set_ready_pr_env(monkeypatch: pytest.MonkeyPatch, repo: Path) -> None:
+    monkeypatch.setenv("LCB_FAKE_GH_PR_DRAFT", "0")
+    monkeypatch.setenv("LCB_FAKE_GH_MERGEABLE", "MERGEABLE")
+    monkeypatch.setenv("LCB_FAKE_GH_MERGE_STATE", "CLEAN")
+    monkeypatch.setenv("LCB_FAKE_GH_REVIEW_DECISION", "APPROVED")
+    monkeypatch.setenv("LCB_FAKE_GH_CHECKS", "passing")
+    monkeypatch.setenv("LCB_FAKE_GH_HEAD_SHA", head(repo))
+
+
+def make_sync_runner(tmp_path: Path) -> tuple[TaskRunner, Path, str]:
+    repo = tmp_path / "project"
+    remote = tmp_path / "origin.git"
+    run(tmp_path, ["git", "init", "--bare", str(remote)])
+    repo.mkdir(parents=True)
+    run(repo, ["git", "init", "-b", "main"])
+    run(repo, ["git", "config", "user.email", "test@example.invalid"])
+    run(repo, ["git", "config", "user.name", "Test User"])
+    (repo / "tracked.txt").write_text("initial\n", encoding="utf-8")
+    run(repo, ["git", "add", "tracked.txt"])
+    run(repo, ["git", "commit", "-m", "initial"])
+    run(repo, ["git", "remote", "add", "origin", str(remote)])
+    run(repo, ["git", "push", "-u", "origin", "main"])
+    initial = head(repo)
+    run(repo, ["git", "update-ref", "refs/remotes/origin/main", initial])
+
+    cfg = BridgeConfig(
+        server=ServerConfig(task_dir=tmp_path / "tasks"),
+        projects={"dummy": ProjectConfig(name="Dummy", path=repo)},
+    )
+    return TaskRunner(cfg), repo, initial
+
+
+def make_commit_object(repo: Path, parent: str, message: str) -> str:
+    tree = run(repo, ["git", "rev-parse", f"{parent}^{{tree}}"]).stdout.strip()
+    return run(repo, ["git", "commit-tree", tree, "-p", parent, "-m", message]).stdout.strip()
 
 
 def test_dirty_worktree_blocks_create(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -445,3 +493,281 @@ def test_json_parse_failure_returns_blocked_gh_output(
     result = runner.github_get_pr_status("dummy", 123)
 
     assert result["status"] == "blocked_gh_output"
+
+
+def test_pr_sync_readiness_ready_pr_with_matching_local_branch_and_head(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner, repo, _ = make_runner(tmp_path, monkeypatch)
+    set_ready_pr_env(monkeypatch, repo)
+
+    result = runner.get_pr_sync_readiness("dummy", 123)
+
+    assert result["status"] == "ok"
+    assert result["ready_to_consider_merge"] is True
+    assert result["pr_readiness"]["ready_to_consider_merge"] is True
+    assert result["pr_readiness"]["check_summary"]["status"] == "passing"
+    assert result["pr_readiness"]["local_branch_matches_pr_head"] is True
+    assert result["pr_readiness"]["local_head_matches_pr_head_sha"] is True
+
+
+@pytest.mark.parametrize(
+    ("env_name", "env_value"),
+    [
+        ("LCB_FAKE_GH_PR_DRAFT", "1"),
+        ("LCB_FAKE_GH_PR_STATE", "CLOSED"),
+        ("LCB_FAKE_GH_MERGEABLE", "CONFLICTING"),
+        ("LCB_FAKE_GH_MERGE_STATE", "BLOCKED"),
+        ("LCB_FAKE_GH_CHECKS", "failing"),
+        ("LCB_FAKE_GH_CHECKS", "pending"),
+        ("LCB_FAKE_GH_REVIEW_DECISION", "CHANGES_REQUESTED"),
+    ],
+)
+def test_pr_sync_readiness_pr_blockers_are_not_ready(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    env_name: str,
+    env_value: str,
+) -> None:
+    runner, repo, _ = make_runner(tmp_path, monkeypatch)
+    set_ready_pr_env(monkeypatch, repo)
+    monkeypatch.setenv(env_name, env_value)
+
+    result = runner.get_pr_sync_readiness("dummy", 123)
+
+    assert result["status"] == "ok"
+    assert result["pr_readiness"]["ready_to_consider_merge"] is False
+    assert result["pr_readiness"]["blocking_reasons"]
+
+
+@pytest.mark.parametrize("checks", ["missing", "unknown"])
+def test_pr_sync_readiness_missing_or_unknown_checks_not_ready_with_warning(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    checks: str,
+) -> None:
+    runner, repo, _ = make_runner(tmp_path, monkeypatch)
+    set_ready_pr_env(monkeypatch, repo)
+    monkeypatch.setenv("LCB_FAKE_GH_CHECKS", checks)
+
+    result = runner.get_pr_sync_readiness("dummy", 123)
+
+    assert result["pr_readiness"]["check_summary"]["status"] == checks
+    assert result["pr_readiness"]["ready_to_consider_merge"] is False
+    assert any("check evidence" in warning for warning in result["pr_readiness"]["warnings"])
+
+
+def test_pr_sync_readiness_dirty_worktree_blocks_pr_and_sync(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner, repo, _ = make_runner(tmp_path, monkeypatch)
+    set_ready_pr_env(monkeypatch, repo)
+    (repo / "tracked.txt").write_text("dirty\n", encoding="utf-8")
+
+    result = runner.get_pr_sync_readiness("dummy", 123)
+
+    assert result["pr_readiness"]["ready_to_consider_merge"] is False
+    assert "Local worktree is dirty" in result["pr_readiness"]["blocking_reasons"]
+    assert result["local_sync_readiness"]["ready_to_sync_local_target"] is False
+    assert "Local worktree is dirty" in result["local_sync_readiness"]["blocking_reasons"]
+
+
+def test_pr_sync_readiness_local_branch_mismatch_not_ready(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner, repo, _ = make_runner(tmp_path, monkeypatch)
+    set_ready_pr_env(monkeypatch, repo)
+    monkeypatch.setenv("LCB_FAKE_GH_HEAD_BRANCH", "other")
+
+    result = runner.get_pr_sync_readiness("dummy", 123)
+
+    assert result["pr_readiness"]["local_branch_matches_pr_head"] is False
+    assert result["pr_readiness"]["ready_to_consider_merge"] is False
+
+
+def test_pr_sync_readiness_local_head_mismatch_not_ready(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner, repo, _ = make_runner(tmp_path, monkeypatch)
+    set_ready_pr_env(monkeypatch, repo)
+    monkeypatch.setenv("LCB_FAKE_GH_HEAD_SHA", "0" * 40)
+
+    result = runner.get_pr_sync_readiness("dummy", 123)
+
+    assert result["pr_readiness"]["local_head_matches_pr_head_sha"] is False
+    assert result["pr_readiness"]["ready_to_consider_merge"] is False
+
+
+def test_pr_sync_readiness_no_pr_found_returns_structured_not_ready(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner, repo, _ = make_runner(tmp_path, monkeypatch)
+    set_ready_pr_env(monkeypatch, repo)
+
+    result = runner.get_pr_sync_readiness("dummy")
+
+    assert result["status"] == "ok"
+    assert result["pr_readiness"]["status"] == "no_pr"
+    assert result["pr_readiness"]["ready_to_consider_merge"] is False
+
+
+def test_pr_sync_readiness_gh_failure_is_structured_not_ready(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner, repo, _ = make_runner(tmp_path, monkeypatch)
+    set_ready_pr_env(monkeypatch, repo)
+    monkeypatch.setenv("LCB_FAKE_GH_SCENARIO", "json_fail")
+
+    result = runner.get_pr_sync_readiness("dummy", 123)
+
+    assert result["status"] == "ok"
+    assert result["pr_readiness"]["status"] == "blocked_gh_output"
+    assert result["pr_readiness"]["ready_to_consider_merge"] is False
+
+
+def test_pr_sync_readiness_git_failure_is_structured_not_ready(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner, repo, _ = make_runner(tmp_path, monkeypatch)
+    set_ready_pr_env(monkeypatch, repo)
+    original_run = runner._run
+
+    def fake_run(cwd: Path, cmd: list[str], timeout: int, max_chars: int = 20000) -> dict[str, Any]:
+        if cmd == ["git", "status", "--short", "--branch"]:
+            return {"cmd": cmd, "returncode": 1, "stdout": "", "stderr": "forced failure"}
+        return original_run(cwd, cmd, timeout, max_chars)
+
+    monkeypatch.setattr(runner, "_run", fake_run)
+
+    result = runner.get_pr_sync_readiness("dummy", 123)
+
+    assert result["status"] == "ok"
+    assert result["pr_readiness"]["status"] == "blocked_git"
+    assert result["local_sync_readiness"]["status"] == "blocked_git"
+
+
+def test_pr_sync_readiness_clean_target_equal_origin_target_sync_ready(tmp_path: Path) -> None:
+    runner, _, _ = make_sync_runner(tmp_path)
+
+    result = runner.get_pr_sync_readiness("dummy", target_branch="main")
+
+    sync = result["local_sync_readiness"]
+    assert sync["ready_to_sync_local_target"] is True
+    assert sync["relation"] == "equal"
+    assert sync["local_target_has_unique_commits"] is False
+    assert any("No sync appears necessary" in warning for warning in sync["warnings"])
+    assert sync["suggested_operator_commands"]
+
+
+def test_pr_sync_readiness_clean_target_behind_origin_target_sync_ready(tmp_path: Path) -> None:
+    runner, repo, initial = make_sync_runner(tmp_path)
+    remote_only = make_commit_object(repo, initial, "remote only")
+    run(repo, ["git", "update-ref", "refs/remotes/origin/main", remote_only])
+
+    result = runner.get_pr_sync_readiness("dummy", target_branch="main")
+
+    sync = result["local_sync_readiness"]
+    assert sync["ready_to_sync_local_target"] is True
+    assert sync["relation"] == "behind"
+    assert sync["local_target_has_unique_commits"] is False
+    assert sync["remote_target_has_unique_commits"] is True
+
+
+def test_pr_sync_readiness_local_target_ahead_not_sync_ready(tmp_path: Path) -> None:
+    runner, repo, _ = make_sync_runner(tmp_path)
+    (repo / "tracked.txt").write_text("local\n", encoding="utf-8")
+    run(repo, ["git", "commit", "-am", "local only"])
+
+    result = runner.get_pr_sync_readiness("dummy", target_branch="main")
+
+    sync = result["local_sync_readiness"]
+    assert sync["ready_to_sync_local_target"] is False
+    assert sync["relation"] == "ahead"
+    assert sync["local_target_has_unique_commits"] is True
+
+
+def test_pr_sync_readiness_local_target_diverged_not_sync_ready(tmp_path: Path) -> None:
+    runner, repo, initial = make_sync_runner(tmp_path)
+    remote_only = make_commit_object(repo, initial, "remote only")
+    run(repo, ["git", "update-ref", "refs/remotes/origin/main", remote_only])
+    (repo / "tracked.txt").write_text("local\n", encoding="utf-8")
+    run(repo, ["git", "commit", "-am", "local only"])
+
+    result = runner.get_pr_sync_readiness("dummy", target_branch="main")
+
+    sync = result["local_sync_readiness"]
+    assert sync["ready_to_sync_local_target"] is False
+    assert sync["relation"] == "diverged"
+    assert sync["local_target_has_unique_commits"] is True
+    assert sync["remote_target_has_unique_commits"] is True
+
+
+def test_pr_sync_readiness_detached_head_not_sync_ready(tmp_path: Path) -> None:
+    runner, repo, _ = make_sync_runner(tmp_path)
+    run(repo, ["git", "checkout", "--detach", "HEAD"])
+
+    result = runner.get_pr_sync_readiness("dummy", target_branch="main")
+
+    sync = result["local_sync_readiness"]
+    assert sync["ready_to_sync_local_target"] is False
+    assert "Local repository is detached or current branch is unknown" in sync["blocking_reasons"]
+
+
+def test_pr_sync_readiness_missing_origin_remote_not_sync_ready(tmp_path: Path) -> None:
+    runner, repo, _ = make_sync_runner(tmp_path)
+    run(repo, ["git", "remote", "remove", "origin"])
+
+    result = runner.get_pr_sync_readiness("dummy", target_branch="main")
+
+    sync = result["local_sync_readiness"]
+    assert sync["ready_to_sync_local_target"] is False
+    assert "origin remote is not configured" in sync["blocking_reasons"]
+
+
+def test_pr_sync_readiness_missing_origin_target_ref_not_sync_ready(tmp_path: Path) -> None:
+    runner, repo, _ = make_sync_runner(tmp_path)
+    run(repo, ["git", "update-ref", "-d", "refs/remotes/origin/main"])
+
+    result = runner.get_pr_sync_readiness("dummy", target_branch="main")
+
+    sync = result["local_sync_readiness"]
+    assert sync["ready_to_sync_local_target"] is False
+    assert "Local origin target ref does not exist" in sync["blocking_reasons"]
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "error_text"),
+    [
+        ({"remote": "upstream"}, "origin"),
+        ({"target_branch": "origin/main"}, "remote-style"),
+        ({"target_branch": "HEAD"}, "HEAD"),
+    ],
+)
+def test_pr_sync_readiness_invalid_remote_or_target_branch_blocked(
+    tmp_path: Path,
+    kwargs: dict[str, str],
+    error_text: str,
+) -> None:
+    runner, _, _ = make_sync_runner(tmp_path)
+
+    result = runner.get_pr_sync_readiness("dummy", **kwargs)
+
+    assert result["status"] == "blocked_input"
+    assert error_text in result["error"]
+
+
+def test_pr_sync_readiness_unknown_project_blocked(tmp_path: Path) -> None:
+    runner, _, _ = make_sync_runner(tmp_path)
+
+    result = runner.get_pr_sync_readiness("missing")
+
+    assert result["status"] == "blocked_input"
+    assert result["ready_to_consider_merge"] is False
+    assert result["ready_to_sync_local_target"] is False

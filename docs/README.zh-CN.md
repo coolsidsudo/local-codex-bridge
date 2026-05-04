@@ -70,6 +70,7 @@ GitHub 或其他 VCS host
 - `git_commit_and_push` — 在人工批准后，stage 已批准文件、创建一个 commit，并 push 到 `origin` 上的当前分支。
 - `github_create_pr` — 通过已安装的 `gh` CLI，为已经 push 的当前分支创建 GitHub pull request。
 - `github_get_pr_status` — 通过已安装的 `gh` CLI 读取 GitHub pull request 状态和证据。
+- `get_pr_sync_readiness` — 只读报告 PR 是否可供人工考虑 merge，以及本地目标分支是否可同步。
 
 v0 不暴露任意 shell 执行。验证命令必须在每个项目 profile 中显式 allowlist。`git_create_work_branch` 和 `git_commit_and_push` 是 bridge 自有的 Git 操作，不是通用 shell 或通用文件系统工具。
 
@@ -133,6 +134,8 @@ ChatGPT 规划 / 审查
 - 未发布分支和 remote SHA 不匹配会被拒绝；C2 不增加 push-upstream 权限。
 - 如果当前分支已有 open PR，则返回已有 PR 证据，不创建重复 PR。
 - 新 PR 默认是 draft；允许创建非 draft PR，但 merge 和 auto-merge 仍不在范围内。
+
+`get_pr_sync_readiness` 是人工 PR / acceptance 尾部流程的只读 follow-up。它把 `gh` PR 证据和本地 git 证据合并，报告 PR 是否看起来可供人工/operator 考虑 merge，以及本地目标分支（默认 `main`）是否基于本地 refs 看起来可以同步到 `origin/<target>`。它不会 merge、auto-merge、修改 PR、fetch、reset、switch、pull、push、删除分支，或触碰 tags/releases。返回的 operator commands（如果有）只是建议文本，bridge 不会执行它们。
 
 ## 环境要求
 
@@ -444,6 +447,7 @@ run_verification_bundle
 git_commit_and_push
 github_create_pr
 github_get_pr_status
+get_pr_sync_readiness
 ```
 
 ChatGPT 侧 developer MCP 错误，例如 `FORBIDDEN: This conversation does not support developer MCPs`，应视为平台 / conversation gating。Local Codex Bridge 不能保证通过修改 bridge 代码来解除这个平台限制。
@@ -504,6 +508,7 @@ Smoke test only. Do not edit files.
 12. 如果变更可接受，明确批准精确文件列表和 commit message。
 13. 只有在人工批准后才调用 git_commit_and_push。
 14. 确认返回的 branch、remote、commit、push output 和 final status。
+15. PR 创建并审查后，使用 get_pr_sync_readiness 获取只读的 PR merge-consideration 和本地目标分支 sync 证据，再执行任何人工 merge/sync 命令。
 ```
 
 ## 15. 常见问题

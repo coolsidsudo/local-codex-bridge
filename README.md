@@ -72,6 +72,7 @@ The tool surface is intentionally conservative:
 - `git_commit_and_push` — after human approval, stage approved files, create one commit, and push it to the current branch on `origin`.
 - `github_create_pr` — create a GitHub pull request for an already-pushed current branch via the installed `gh` CLI.
 - `github_get_pr_status` — read GitHub pull request status/evidence via the installed `gh` CLI.
+- `get_pr_sync_readiness` — read-only evidence for PR merge consideration and local target-branch sync readiness.
 
 The bridge does **not** expose arbitrary shell execution in v0. Verification commands are allowlisted per project. `git_create_work_branch` and `git_commit_and_push` are bridge-owned Git operations, not general shell or filesystem tools.
 
@@ -135,6 +136,8 @@ Safeguards:
 - Unpublished branches and remote SHA mismatches are refused; C2 does not add push-upstream authority.
 - If an open PR already exists for the current branch, the existing PR evidence is returned instead of creating a duplicate.
 - New PRs are drafts by default; non-draft creation is allowed, but merge and auto-merge remain out of scope.
+
+`get_pr_sync_readiness` is a read-only follow-up for the manual PR/acceptance tail. It combines `gh` PR evidence with local git evidence to report whether a PR appears ready for a human/operator to consider merging and whether a local target branch, by default `main`, appears safe to sync to `origin/<target>` using local refs only. It does not merge, auto-merge, mutate PRs, fetch, reset, switch, pull, push, delete branches, or touch tags/releases. Suggested operator commands, when present, are advisory text only and are not executed by the bridge.
 
 ## Requirements
 
@@ -446,6 +449,7 @@ run_verification_bundle
 git_commit_and_push
 github_create_pr
 github_get_pr_status
+get_pr_sync_readiness
 ```
 
 ChatGPT-side developer MCP errors such as `FORBIDDEN: This conversation does not support developer MCPs` are platform/conversation gating. Local Codex Bridge cannot guarantee that bridge-code changes will enable developer MCPs for a gated ChatGPT conversation.
@@ -506,6 +510,7 @@ Before starting real implementation work:
 12. If changes are acceptable, explicitly approve the exact files and commit message.
 13. Call git_commit_and_push only after human approval.
 14. Confirm the returned branch, remote, commit, push output, and final status.
+15. After PR creation and review, use get_pr_sync_readiness for read-only PR merge-consideration and local target sync evidence before any manual merge/sync commands.
 ```
 
 ## 15. Common issues
