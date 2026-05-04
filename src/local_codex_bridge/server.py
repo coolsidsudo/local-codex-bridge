@@ -218,4 +218,19 @@ def build_mcp(config: str | Path | BridgeConfig) -> FastMCP:
             pr_url_or_number=pr_url_or_number,
         )
 
+    @mcp.tool
+    def get_pr_sync_readiness(
+        project_id: str,
+        pr_url_or_number: str | int | None = None,
+        target_branch: str = "main",
+        remote: str = "origin",
+    ) -> dict[str, Any]:
+        """Read-only PR merge-consideration and local target-branch sync evidence."""
+        return runner.get_pr_sync_readiness(
+            project_id=project_id,
+            pr_url_or_number=pr_url_or_number,
+            target_branch=target_branch,
+            remote=remote,
+        )
+
     return mcp

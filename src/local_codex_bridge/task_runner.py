@@ -64,6 +64,19 @@ GITHUB_PR_JSON_FIELDS = ",".join(
     ]
 )
 GH_JSON_MAX_CHARS = 60000
+CHECK_PASS_VALUES = {"SUCCESS", "SKIPPED", "NEUTRAL"}
+CHECK_FAIL_VALUES = {
+    "ACTION_REQUIRED",
+    "CANCELLED",
+    "ERROR",
+    "FAILED",
+    "FAILURE",
+    "STARTUP_FAILURE",
+    "STALE",
+    "TIMED_OUT",
+}
+CHECK_PENDING_VALUES = {"EXPECTED", "IN_PROGRESS", "PENDING", "QUEUED", "REQUESTED", "WAITING"}
+BLOCKING_REVIEW_DECISIONS = {"CHANGES_REQUESTED", "REVIEW_REQUIRED"}
 CHANGED_FILE_TEXT_DEFAULT_MAX_CHARS = 60000
 CHANGED_FILE_TEXT_MIN_READ_BYTES = 4096
 CHANGED_FILE_TEXT_UTF8_BOUNDARY_BYTES = 4
@@ -1767,6 +1780,621 @@ class TaskRunner:
         if canonical["status"] != "ok":
             return {**canonical, **evidence}
         return {"status": "ok", "pr": canonical["pr"], **evidence}
+
+    def get_pr_sync_readiness(
+        self,
+        project_id: str,
+        pr_url_or_number: str | int | None = None,
+        target_branch: str = "main",
+        remote: str = "origin",
+    ) -> dict[str, Any]:
+        try:
+            project = self._project(project_id)
+        except ValueError as exc:
+            error = str(exc)
+            return {
+                "status": "blocked_input",
+                "error": error,
+                "project_id": project_id,
+                "requested_pr": pr_url_or_number,
+                "target_branch": target_branch,
+                "remote": remote,
+                "ready_to_consider_merge": False,
+                "ready_to_sync_local_target": False,
+                "pr_readiness": self._empty_pr_readiness(
+                    status="blocked_input",
+                    blocking_reasons=[error],
+                ),
+                "local_sync_readiness": self._empty_sync_readiness(
+                    target_branch=target_branch,
+                    remote=remote,
+                    status="blocked_input",
+                    blocking_reasons=[error],
+                ),
+                "limits": self._pr_sync_limits(),
+            }
+
+        repo = project.path
+        base: dict[str, Any] = {
+            "project_id": project_id,
+            "name": project.name,
+            "path": str(repo),
+            "requested_pr": pr_url_or_number,
+            "target_branch": target_branch,
+            "remote": remote,
+            "ready_to_consider_merge": False,
+            "ready_to_sync_local_target": False,
+            "limits": self._pr_sync_limits(),
+        }
+
+        if remote != "origin":
+            error = "Only remote='origin' is supported"
+            return {
+                **base,
+                "status": "blocked_input",
+                "error": error,
+                "pr_readiness": self._empty_pr_readiness(
+                    status="blocked_input",
+                    blocking_reasons=[error],
+                ),
+                "local_sync_readiness": self._empty_sync_readiness(
+                    target_branch=target_branch,
+                    remote=remote,
+                    status="blocked_input",
+                    blocking_reasons=[error],
+                ),
+            }
+        if not isinstance(target_branch, str):
+            error = "target_branch must be a string"
+            return {
+                **base,
+                "status": "blocked_input",
+                "error": error,
+                "pr_readiness": self._empty_pr_readiness(
+                    status="blocked_input",
+                    blocking_reasons=[error],
+                ),
+                "local_sync_readiness": self._empty_sync_readiness(
+                    target_branch=target_branch,
+                    remote=remote,
+                    status="blocked_input",
+                    blocking_reasons=[error],
+                ),
+            }
+
+        target_validation = self._validate_branch_name(repo, target_branch, "target_branch")
+        if target_validation["status"] != "ok":
+            error = target_validation["error"]
+            return {
+                **base,
+                "status": "blocked_input",
+                "error": error,
+                "target_branch_validation": target_validation,
+                "pr_readiness": self._empty_pr_readiness(
+                    status="blocked_input",
+                    blocking_reasons=[error],
+                ),
+                "local_sync_readiness": self._empty_sync_readiness(
+                    target_branch=target_branch,
+                    remote=remote,
+                    status="blocked_input",
+                    blocking_reasons=[error],
+                ),
+            }
+
+        remote_style = self._is_remote_style_branch(repo, target_validation["name"])
+        if remote_style["status"] != "ok":
+            error = "Could not inspect git remotes while validating target_branch"
+            local = self._collect_pr_sync_local_evidence(repo)
+            pr_readiness = self._empty_pr_readiness(
+                status="blocked_git",
+                blocking_reasons=[error],
+            )
+            sync_readiness = self._empty_sync_readiness(
+                target_branch=target_validation["name"],
+                remote=remote,
+                status="blocked_git",
+                blocking_reasons=[error],
+            )
+            return {
+                **base,
+                "status": "ok",
+                "target_branch": target_validation["name"],
+                "target_branch_validation": target_validation,
+                "target_remote_style_check": remote_style,
+                "local": local,
+                "pr_readiness": pr_readiness,
+                "local_sync_readiness": sync_readiness,
+            }
+        if remote_style["remote_style"]:
+            error = "target_branch must not be a remote-style branch"
+            return {
+                **base,
+                "status": "blocked_input",
+                "error": error,
+                "target_branch_validation": target_validation,
+                "target_remote_style_check": remote_style,
+                "pr_readiness": self._empty_pr_readiness(
+                    status="blocked_input",
+                    blocking_reasons=[error],
+                ),
+                "local_sync_readiness": self._empty_sync_readiness(
+                    target_branch=target_validation["name"],
+                    remote=remote,
+                    status="blocked_input",
+                    blocking_reasons=[error],
+                ),
+            }
+
+        target = target_validation["name"]
+        local = self._collect_pr_sync_local_evidence(repo)
+        pr_readiness = self._build_pr_merge_readiness(
+            repo=repo,
+            pr_url_or_number=pr_url_or_number,
+            target_branch=target,
+            local=local,
+        )
+        sync_readiness = self._build_local_sync_readiness(
+            repo=repo,
+            target_branch=target,
+            remote=remote,
+            local=local,
+        )
+
+        return {
+            **base,
+            "status": "ok",
+            "target_branch": target,
+            "target_branch_validation": target_validation,
+            "target_remote_style_check": remote_style,
+            "local": local,
+            "ready_to_consider_merge": pr_readiness["ready_to_consider_merge"],
+            "ready_to_sync_local_target": sync_readiness["ready_to_sync_local_target"],
+            "pr_readiness": pr_readiness,
+            "local_sync_readiness": sync_readiness,
+        }
+
+    def _pr_sync_limits(self) -> dict[str, Any]:
+        return {
+            "read_only": True,
+            "mutation_performed": False,
+            "no_merge_authority": True,
+            "sync_uses_local_refs_only": True,
+        }
+
+    def _empty_pr_readiness(
+        self,
+        status: str = "ok",
+        blocking_reasons: list[str] | None = None,
+        warnings: list[str] | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "status": status,
+            "ready_to_consider_merge": False,
+            "number": None,
+            "url": None,
+            "state": None,
+            "is_draft": None,
+            "base_branch": None,
+            "head_branch": None,
+            "head_sha": None,
+            "mergeable": None,
+            "merge_state_status": None,
+            "review_decision": None,
+            "check_summary": {"status": "unknown", "total": 0},
+            "local_current_branch": None,
+            "local_head": None,
+            "detached": None,
+            "dirty": None,
+            "local_branch_matches_pr_head": None,
+            "local_head_matches_pr_head_sha": None,
+            "blocking_reasons": blocking_reasons or [],
+            "warnings": warnings or [],
+            "evidence": {},
+        }
+
+    def _empty_sync_readiness(
+        self,
+        target_branch: Any,
+        remote: str,
+        status: str = "ok",
+        blocking_reasons: list[str] | None = None,
+        warnings: list[str] | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "status": status,
+            "target_branch": target_branch,
+            "remote": remote,
+            "remote_target": f"{remote}/{target_branch}" if isinstance(target_branch, str) else None,
+            "current_branch": None,
+            "detached": None,
+            "dirty": None,
+            "local_target_sha": None,
+            "remote_target_ref": None,
+            "remote_target_sha": None,
+            "divergence": None,
+            "relation": "unknown",
+            "local_target_has_unique_commits": None,
+            "remote_target_has_unique_commits": None,
+            "ready_to_sync_local_target": False,
+            "blocking_reasons": blocking_reasons or [],
+            "warnings": warnings or [],
+            "suggested_operator_commands": [],
+            "evidence": {},
+        }
+
+    def _collect_pr_sync_local_evidence(self, repo: Path) -> dict[str, Any]:
+        short_status = self._run(repo, ["git", "status", "--short", "--branch"], timeout=20)
+        porcelain_status = self._porcelain_status(repo)
+        current_branch_result = self._current_branch(repo)
+        current_branch = current_branch_result["stdout"].strip()
+        head = self._run(repo, ["git", "rev-parse", "--verify", "HEAD"], timeout=20)
+        origin_url = self._run(repo, ["git", "remote", "get-url", "origin"], timeout=20)
+        remotes = self._run(repo, ["git", "remote", "-v"], timeout=20)
+
+        git_errors: list[str] = []
+        for key, result in [
+            ("status_short_branch", short_status),
+            ("porcelain_status", porcelain_status),
+            ("current_branch_result", current_branch_result),
+            ("head", head),
+            ("remotes", remotes),
+        ]:
+            if result["returncode"] != 0:
+                git_errors.append(f"git command failed while collecting {key}")
+
+        return {
+            "status": "blocked_git" if git_errors else "ok",
+            "git_errors": git_errors,
+            "current_branch": current_branch or None,
+            "detached": current_branch_result["returncode"] != 0 or not current_branch,
+            "dirty": porcelain_status["returncode"] == 0 and bool(porcelain_status["stdout"]),
+            "head": head["stdout"].strip() if head["returncode"] == 0 else None,
+            "origin_exists": origin_url["returncode"] == 0,
+            "status_short_branch": short_status,
+            "porcelain_status": porcelain_status,
+            "current_branch_result": current_branch_result,
+            "head_result": head,
+            "origin_url": origin_url,
+            "remotes": remotes,
+        }
+
+    def _build_pr_merge_readiness(
+        self,
+        repo: Path,
+        pr_url_or_number: str | int | None,
+        target_branch: str,
+        local: dict[str, Any],
+    ) -> dict[str, Any]:
+        blocking_reasons = list(local.get("git_errors", []))
+        warnings = [
+            "Readiness is advisory evidence only; Local Codex Bridge cannot merge PRs."
+        ]
+        readiness = self._empty_pr_readiness(
+            status="ok",
+            blocking_reasons=blocking_reasons,
+            warnings=warnings,
+        )
+        readiness.update(
+            {
+                "local_current_branch": local.get("current_branch"),
+                "local_head": local.get("head"),
+                "detached": local.get("detached"),
+                "dirty": local.get("dirty"),
+                "evidence": {
+                    "status_short_branch": local.get("status_short_branch"),
+                    "porcelain_status": local.get("porcelain_status"),
+                    "current_branch_result": local.get("current_branch_result"),
+                    "head": local.get("head_result"),
+                },
+            }
+        )
+        if blocking_reasons:
+            readiness["status"] = "blocked_git"
+            return readiness
+
+        origin = self._github_origin_info(repo)
+        readiness["evidence"]["origin"] = origin
+        if origin["status"] != "ok":
+            readiness["status"] = origin["status"]
+            readiness["blocking_reasons"].append("origin is not a supported GitHub remote")
+            return readiness
+
+        gh_ready = self._github_cli_ready(repo)
+        readiness["evidence"]["gh"] = gh_ready
+        if gh_ready["status"] != "ok":
+            readiness["status"] = gh_ready["status"]
+            readiness["blocking_reasons"].append(gh_ready["error"])
+            return readiness
+
+        pr_result: dict[str, Any]
+        if pr_url_or_number is None:
+            current_branch = local.get("current_branch")
+            if not current_branch:
+                readiness["status"] = "blocked_detached_head"
+                readiness["blocking_reasons"].append(
+                    "Current branch could not be determined for branch PR lookup"
+                )
+                return readiness
+            prs = self._github_prs_for_branch(repo, origin["repo_arg"], current_branch)
+            readiness["evidence"]["prs_for_branch"] = prs
+            if prs["status"] != "ok":
+                readiness["status"] = prs["status"]
+                readiness["blocking_reasons"].append(prs["error"])
+                return readiness
+            if not prs["prs"]:
+                readiness["status"] = "no_pr"
+                readiness["blocking_reasons"].append("No open PR found for current branch")
+                return readiness
+            if len(prs["prs"]) > 1:
+                readiness["status"] = "blocked_ambiguous_pr"
+                readiness["blocking_reasons"].append("Multiple open PRs matched the current branch")
+                return readiness
+            pr_result = {"status": "ok", "pr": prs["prs"][0]}
+        else:
+            parsed = self._parse_pr_reference(pr_url_or_number, origin["owner"], origin["repo"])
+            readiness["evidence"]["parsed_pr_reference"] = parsed
+            if parsed["status"] != "ok":
+                readiness["status"] = "blocked_input"
+                readiness["blocking_reasons"].append("Invalid PR number or URL")
+                return readiness
+            pr_result = self._github_pr_view(repo, origin["repo_arg"], parsed["reference"])
+            readiness["evidence"]["canonical_pr"] = pr_result
+            if pr_result["status"] != "ok":
+                readiness["status"] = pr_result["status"]
+                readiness["blocking_reasons"].append(pr_result["error"])
+                return readiness
+
+        pr = pr_result["pr"]
+        check_summary = self._summarize_status_check_rollup(pr.get("statusCheckRollup"))
+        state = pr.get("state")
+        is_draft = pr.get("isDraft")
+        base_branch = pr.get("baseRefName")
+        head_branch = pr.get("headRefName")
+        head_sha = pr.get("headRefOid")
+        mergeable = pr.get("mergeable")
+        merge_state_status = pr.get("mergeStateStatus")
+        review_decision = pr.get("reviewDecision")
+        local_branch_matches = (
+            local.get("current_branch") == head_branch
+            if local.get("current_branch") is not None and isinstance(head_branch, str)
+            else None
+        )
+        local_head_matches = (
+            local.get("head") == head_sha
+            if local.get("head") is not None and isinstance(head_sha, str)
+            else None
+        )
+
+        readiness.update(
+            {
+                "number": pr.get("number"),
+                "url": pr.get("url"),
+                "state": state,
+                "is_draft": is_draft,
+                "base_branch": base_branch,
+                "head_branch": head_branch,
+                "head_sha": head_sha,
+                "mergeable": mergeable,
+                "merge_state_status": merge_state_status,
+                "review_decision": review_decision,
+                "check_summary": check_summary,
+                "local_branch_matches_pr_head": local_branch_matches,
+                "local_head_matches_pr_head_sha": local_head_matches,
+                "pr": pr,
+            }
+        )
+
+        if state != "OPEN":
+            readiness["blocking_reasons"].append("PR is not open")
+        if is_draft is not False:
+            readiness["blocking_reasons"].append("PR is draft or draft status is unknown")
+        if base_branch != target_branch:
+            readiness["blocking_reasons"].append("PR base branch does not match target_branch")
+        if mergeable != "MERGEABLE":
+            readiness["blocking_reasons"].append("PR mergeability is not confirmed mergeable")
+        if merge_state_status != "CLEAN":
+            readiness["blocking_reasons"].append("PR merge state is not clean")
+        if check_summary["status"] != "passing":
+            readiness["blocking_reasons"].append("PR checks are not confirmed passing")
+            if check_summary["status"] in {"missing", "unknown"}:
+                readiness["warnings"].append("Missing or unknown check evidence is treated as not ready")
+        if review_decision != "APPROVED":
+            if review_decision in BLOCKING_REVIEW_DECISIONS:
+                readiness["blocking_reasons"].append("PR review decision is blocking")
+            else:
+                readiness["blocking_reasons"].append("PR review decision is missing or unknown")
+                readiness["warnings"].append("Missing review-decision evidence is treated as not ready")
+        if local.get("dirty"):
+            readiness["blocking_reasons"].append("Local worktree is dirty")
+        if local.get("detached"):
+            readiness["blocking_reasons"].append("Local repository is detached or current branch is unknown")
+        if local_branch_matches is not True:
+            readiness["blocking_reasons"].append("Local current branch does not match PR head branch")
+        if local_head_matches is not True:
+            readiness["blocking_reasons"].append("Local HEAD does not match PR head SHA")
+
+        readiness["ready_to_consider_merge"] = not readiness["blocking_reasons"]
+        return readiness
+
+    def _summarize_status_check_rollup(self, rollup: Any) -> dict[str, Any]:
+        if not isinstance(rollup, list):
+            return {"status": "unknown", "total": 0, "passing": 0, "failing": 0, "pending": 0, "unknown": 1}
+        if not rollup:
+            return {"status": "missing", "total": 0, "passing": 0, "failing": 0, "pending": 0, "unknown": 0}
+
+        counts = {"passing": 0, "failing": 0, "pending": 0, "unknown": 0}
+        items: list[dict[str, Any]] = []
+        for item in rollup:
+            status = "unknown"
+            name = None
+            if isinstance(item, dict):
+                name = item.get("name") or item.get("context") or item.get("workflowName")
+                conclusion = self._upper_or_none(item.get("conclusion"))
+                state = self._upper_or_none(item.get("state"))
+                check_status = self._upper_or_none(item.get("status"))
+                values = {value for value in [conclusion, state, check_status] if value}
+                if values & CHECK_FAIL_VALUES:
+                    status = "failing"
+                elif values & CHECK_PENDING_VALUES:
+                    status = "pending"
+                elif conclusion in CHECK_PASS_VALUES or state == "SUCCESS":
+                    status = "passing"
+                elif check_status == "COMPLETED" and conclusion in CHECK_PASS_VALUES:
+                    status = "passing"
+            counts[status] += 1
+            items.append({"name": name, "status": status})
+
+        overall = "passing"
+        if counts["failing"]:
+            overall = "failing"
+        elif counts["pending"]:
+            overall = "pending"
+        elif counts["unknown"]:
+            overall = "unknown"
+        return {"status": overall, "total": len(rollup), **counts, "items": items}
+
+    def _upper_or_none(self, value: Any) -> str | None:
+        return value.upper() if isinstance(value, str) and value else None
+
+    def _build_local_sync_readiness(
+        self,
+        repo: Path,
+        target_branch: str,
+        remote: str,
+        local: dict[str, Any],
+    ) -> dict[str, Any]:
+        blocking_reasons = list(local.get("git_errors", []))
+        warnings = ["Sync readiness uses local refs only; no fetch was performed."]
+        sync = self._empty_sync_readiness(
+            target_branch=target_branch,
+            remote=remote,
+            status="ok",
+            blocking_reasons=blocking_reasons,
+            warnings=warnings,
+        )
+        sync.update(
+            {
+                "current_branch": local.get("current_branch"),
+                "detached": local.get("detached"),
+                "dirty": local.get("dirty"),
+                "evidence": {
+                    "status_short_branch": local.get("status_short_branch"),
+                    "porcelain_status": local.get("porcelain_status"),
+                    "current_branch_result": local.get("current_branch_result"),
+                    "head": local.get("head_result"),
+                    "origin_url": local.get("origin_url"),
+                    "remotes": local.get("remotes"),
+                },
+            }
+        )
+        if blocking_reasons:
+            sync["status"] = "blocked_git"
+            return sync
+        if local.get("dirty"):
+            sync["blocking_reasons"].append("Local worktree is dirty")
+        if local.get("detached"):
+            sync["blocking_reasons"].append("Local repository is detached or current branch is unknown")
+        if not local.get("origin_exists"):
+            sync["blocking_reasons"].append("origin remote is not configured")
+
+        local_target_ref = f"refs/heads/{target_branch}"
+        remote_target_ref = f"refs/remotes/{remote}/{target_branch}"
+        local_target = self._run(
+            repo,
+            ["git", "rev-parse", "--verify", f"{local_target_ref}^{{commit}}"],
+            timeout=20,
+        )
+        remote_target = self._run(
+            repo,
+            ["git", "rev-parse", "--verify", f"{remote_target_ref}^{{commit}}"],
+            timeout=20,
+        )
+        sync["evidence"]["local_target"] = local_target
+        sync["evidence"]["remote_target"] = remote_target
+        if local_target["returncode"] == 0:
+            sync["local_target_sha"] = local_target["stdout"].strip()
+        else:
+            sync["blocking_reasons"].append("Local target branch does not exist")
+        if remote_target["returncode"] == 0:
+            sync["remote_target_ref"] = remote_target_ref
+            sync["remote_target_sha"] = remote_target["stdout"].strip()
+        else:
+            sync["blocking_reasons"].append("Local origin target ref does not exist")
+
+        if local_target["returncode"] == 0 and remote_target["returncode"] == 0:
+            divergence = self._run(
+                repo,
+                ["git", "rev-list", "--left-right", "--count", f"{remote_target_ref}...{local_target_ref}"],
+                timeout=20,
+            )
+            sync["evidence"]["divergence"] = divergence
+            if divergence["returncode"] != 0:
+                sync["blocking_reasons"].append("Could not inspect local target divergence")
+            else:
+                parts = divergence["stdout"].strip().split()
+                if len(parts) != 2:
+                    sync["blocking_reasons"].append("Could not parse local target divergence")
+                else:
+                    try:
+                        remote_unique = int(parts[0])
+                        local_unique = int(parts[1])
+                    except ValueError:
+                        sync["blocking_reasons"].append("Could not parse local target divergence")
+                    else:
+                        relation = "unknown"
+                        if remote_unique == 0 and local_unique == 0:
+                            relation = "equal"
+                            sync["warnings"].append("No sync appears necessary; local target equals local origin target ref")
+                        elif remote_unique > 0 and local_unique == 0:
+                            relation = "behind"
+                        elif remote_unique == 0 and local_unique > 0:
+                            relation = "ahead"
+                        elif remote_unique > 0 and local_unique > 0:
+                            relation = "diverged"
+                        sync.update(
+                            {
+                                "divergence": {
+                                    "remote_unique_commits": remote_unique,
+                                    "local_unique_commits": local_unique,
+                                },
+                                "relation": relation,
+                                "local_target_has_unique_commits": local_unique > 0,
+                                "remote_target_has_unique_commits": remote_unique > 0,
+                            }
+                        )
+                        if local_unique > 0:
+                            sync["blocking_reasons"].append(
+                                "Local target branch has commits not on local origin target ref"
+                            )
+
+        sync["ready_to_sync_local_target"] = not sync["blocking_reasons"]
+        if sync["ready_to_sync_local_target"]:
+            sync["suggested_operator_commands"] = self._suggest_sync_commands(
+                target_branch=target_branch,
+                remote=remote,
+                relation=sync["relation"],
+            )
+        return sync
+
+    def _suggest_sync_commands(
+        self,
+        target_branch: str,
+        remote: str,
+        relation: str,
+    ) -> list[str]:
+        if relation == "equal":
+            return [
+                f"git status --short --branch",
+                f"git rev-list --left-right --count {remote}/{target_branch}...{target_branch}",
+            ]
+        return [
+            f"git switch {target_branch}",
+            f"git fetch {remote} --prune",
+            f"git rev-list --left-right --count {remote}/{target_branch}...{target_branch}",
+            f"git reset --hard {remote}/{target_branch}",
+            "git status --short --branch",
+        ]
 
     def list_tasks(self, limit: int = 20) -> list[dict[str, Any]]:
         task_dirs = sorted(self.config.server.task_dir.glob("*"), key=lambda p: p.name, reverse=True)

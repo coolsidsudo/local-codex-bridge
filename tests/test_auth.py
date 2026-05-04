@@ -586,3 +586,16 @@ async def test_static_bearer_http_endpoint_rejects_unauthenticated_and_accepts_v
     }
     assert "github_create_pr" in tool_names
     assert "github_get_pr_status" in tool_names
+    assert "get_pr_sync_readiness" in tool_names
+    pr_sync_readiness = next(tool for tool in tools if tool.name == "get_pr_sync_readiness")
+    pr_sync_readiness_schema = getattr(pr_sync_readiness, "parameters", None)
+    if pr_sync_readiness_schema is None:
+        pr_sync_readiness_schema = pr_sync_readiness.inputSchema
+    assert pr_sync_readiness_schema["properties"]["target_branch"] == {
+        "default": "main",
+        "type": "string",
+    }
+    assert pr_sync_readiness_schema["properties"]["remote"] == {
+        "default": "origin",
+        "type": "string",
+    }

@@ -100,6 +100,8 @@ When a failure may leave changes staged, the response reports that staged-state 
 
 `github_create_pr` and `github_get_pr_status` are bridge-owned GitHub PR operations backed only by the installed GitHub CLI (`gh`). They do not implement native GitHub API calls, do not manage GitHub tokens, and do not print token values. `gh` authentication remains external operator-controlled state.
 
+`get_pr_sync_readiness` is read-only evidence for the manual PR/acceptance tail. It reports whether a PR appears ready for a human/operator to consider merging and whether a local target branch appears safe to sync to `origin/<target>` using local refs only. It does not merge, auto-merge, admin-bypass, mutate PRs, fetch, reset, switch, pull, push, delete branches, or touch tags/releases. Suggested operator commands, when returned, are advisory text only and are not executed by the bridge.
+
 Safeguards:
 
 - PR operations use fixed `git` and `gh` argument vectors with `shell=False`; no arbitrary shell execution or generic `gh` passthrough is exposed.
