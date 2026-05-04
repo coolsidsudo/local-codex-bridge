@@ -102,6 +102,8 @@ When a failure may leave changes staged, the response reports that staged-state 
 
 `get_pr_sync_readiness` is read-only evidence for the manual PR/acceptance tail. It reports whether a PR appears ready for a human/operator to consider merging and whether a local target branch appears safe to sync to `origin/<target>` using local refs only. It does not merge, auto-merge, admin-bypass, mutate PRs, fetch, reset, switch, pull, push, delete branches, or touch tags/releases. Suggested operator commands, when returned, are advisory text only and are not executed by the bridge.
 
+`git_sync_local_branch_to_origin` is narrow local Git sync authority for the post-merge local sync tail. It uses local refs only and can only no-op without switching branches when a clean local target branch already equals `origin/<target>`, or run fixed `git switch <target>` and `git reset --hard origin/<target>` argv when the local target is strictly behind and all gates pass. It refuses dirty or detached repos, missing local/remote refs, ahead/diverged targets, remote-style branch names, non-`origin` remotes, and unsafe branch names. It does not fetch, pull, push, merge, provide PR merge authority, auto-merge, admin-bypass, mutate PRs, delete branches, or touch tags/releases.
+
 Safeguards:
 
 - PR operations use fixed `git` and `gh` argument vectors with `shell=False`; no arbitrary shell execution or generic `gh` passthrough is exposed.

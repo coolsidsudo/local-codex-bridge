@@ -599,3 +599,16 @@ async def test_static_bearer_http_endpoint_rejects_unauthenticated_and_accepts_v
         "default": "origin",
         "type": "string",
     }
+    assert "git_sync_local_branch_to_origin" in tool_names
+    git_sync = next(tool for tool in tools if tool.name == "git_sync_local_branch_to_origin")
+    git_sync_schema = getattr(git_sync, "parameters", None)
+    if git_sync_schema is None:
+        git_sync_schema = git_sync.inputSchema
+    assert git_sync_schema["properties"]["target_branch"] == {
+        "default": "main",
+        "type": "string",
+    }
+    assert git_sync_schema["properties"]["remote"] == {
+        "default": "origin",
+        "type": "string",
+    }

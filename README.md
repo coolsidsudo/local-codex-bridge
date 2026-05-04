@@ -73,6 +73,7 @@ The tool surface is intentionally conservative:
 - `github_create_pr` — create a GitHub pull request for an already-pushed current branch via the installed `gh` CLI.
 - `github_get_pr_status` — read GitHub pull request status/evidence plus normalized read-only PR readiness evidence via the installed `gh` CLI.
 - `get_pr_sync_readiness` — read-only evidence for PR merge consideration and local target-branch sync readiness.
+- `git_sync_local_branch_to_origin` — after review, sync a clean local target branch to its local `origin/<target>` ref without fetching, pulling, pushing, merging, or mutating PRs.
 
 The bridge does **not** expose arbitrary shell execution in v0. Verification commands are allowlisted per project. `git_create_work_branch` and `git_commit_and_push` are bridge-owned Git operations, not general shell or filesystem tools.
 
@@ -140,6 +141,8 @@ Safeguards:
 `github_get_pr_status` includes a compact normalized `pr_readiness` section with advisory, read-only PR evidence such as draft/open state, mergeability, review decision, checks, local branch/HEAD match, and local dirty state. It does not include target-branch sync readiness or suggested operator commands.
 
 `get_pr_sync_readiness` is a read-only follow-up for the manual PR/acceptance tail. It combines `gh` PR evidence with local git evidence to report whether a PR appears ready for a human/operator to consider merging and whether a local target branch, by default `main`, appears safe to sync to `origin/<target>` using local refs only. It does not merge, auto-merge, mutate PRs, fetch, reset, switch, pull, push, delete branches, or touch tags/releases. Suggested operator commands, when present, are advisory text only and are not executed by the bridge.
+
+`git_sync_local_branch_to_origin` is the narrow execution counterpart for the post-merge local sync tail. It uses local refs only, refuses dirty/detached/ahead/diverged state, returns `ok_noop` without switching branches when the target already equals `origin/<target>`, and only for behind-state sync after all gates pass may run fixed `git switch <target>` and `git reset --hard origin/<target>` argv. It does not fetch, pull, push, merge, mutate PRs, delete branches, or touch tags/releases.
 
 ## Requirements
 
@@ -452,6 +455,7 @@ git_commit_and_push
 github_create_pr
 github_get_pr_status
 get_pr_sync_readiness
+git_sync_local_branch_to_origin
 ```
 
 ChatGPT-side developer MCP errors such as `FORBIDDEN: This conversation does not support developer MCPs` are platform/conversation gating. Local Codex Bridge cannot guarantee that bridge-code changes will enable developer MCPs for a gated ChatGPT conversation.
@@ -512,7 +516,8 @@ Before starting real implementation work:
 12. If changes are acceptable, explicitly approve the exact files and commit message.
 13. Call git_commit_and_push only after human approval.
 14. Confirm the returned branch, remote, commit, push output, and final status.
-15. After PR creation and review, use get_pr_sync_readiness for read-only PR merge-consideration and local target sync evidence before any manual merge/sync commands.
+15. After PR creation and review, use get_pr_sync_readiness for read-only PR merge-consideration and local target sync evidence before any merge/sync action.
+16. After the PR is merged and local refs are already current, call git_sync_local_branch_to_origin only if you want the bridge to perform the narrow local sync to `origin/<target>` using local refs only.
 ```
 
 ## 15. Common issues

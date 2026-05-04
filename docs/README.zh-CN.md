@@ -71,6 +71,7 @@ GitHub 或其他 VCS host
 - `github_create_pr` — 通过已安装的 `gh` CLI，为已经 push 的当前分支创建 GitHub pull request。
 - `github_get_pr_status` — 通过已安装的 `gh` CLI 读取 GitHub pull request 状态、证据和规范化的只读 PR readiness 证据。
 - `get_pr_sync_readiness` — 只读报告 PR 是否可供人工考虑 merge，以及本地目标分支是否可同步。
+- `git_sync_local_branch_to_origin` — 审查后把干净的本地目标分支同步到本地 `origin/<target>` ref；不 fetch、pull、push、merge 或修改 PR。
 
 v0 不暴露任意 shell 执行。验证命令必须在每个项目 profile 中显式 allowlist。`git_create_work_branch` 和 `git_commit_and_push` 是 bridge 自有的 Git 操作，不是通用 shell 或通用文件系统工具。
 
@@ -138,6 +139,8 @@ ChatGPT 规划 / 审查
 `github_get_pr_status` 包含紧凑的规范化 `pr_readiness` 区块，提供 advisory、只读的 PR 证据，例如 draft/open 状态、mergeability、review decision、checks、本地 branch/HEAD 是否匹配，以及本地 dirty 状态。它不包含目标分支 sync readiness，也不返回建议 operator commands。
 
 `get_pr_sync_readiness` 是人工 PR / acceptance 尾部流程的只读 follow-up。它把 `gh` PR 证据和本地 git 证据合并，报告 PR 是否看起来可供人工/operator 考虑 merge，以及本地目标分支（默认 `main`）是否基于本地 refs 看起来可以同步到 `origin/<target>`。它不会 merge、auto-merge、修改 PR、fetch、reset、switch、pull、push、删除分支，或触碰 tags/releases。返回的 operator commands（如果有）只是建议文本，bridge 不会执行它们。
+
+`git_sync_local_branch_to_origin` 是 post-merge 本地 sync 尾部流程的窄执行工具。它只使用本地 refs，拒绝 dirty、detached、ahead 或 diverged 状态；当目标分支已经等于 `origin/<target>` 时返回 `ok_noop` 且不切换分支；只有在所有 gate 通过后的 behind 状态下，才可以运行固定 argv：`git switch <target>` 和 `git reset --hard origin/<target>`。它不会 fetch、pull、push、merge、修改 PR、删除分支，或触碰 tags/releases。
 
 ## 环境要求
 
@@ -450,6 +453,7 @@ git_commit_and_push
 github_create_pr
 github_get_pr_status
 get_pr_sync_readiness
+git_sync_local_branch_to_origin
 ```
 
 ChatGPT 侧 developer MCP 错误，例如 `FORBIDDEN: This conversation does not support developer MCPs`，应视为平台 / conversation gating。Local Codex Bridge 不能保证通过修改 bridge 代码来解除这个平台限制。
@@ -510,7 +514,8 @@ Smoke test only. Do not edit files.
 12. 如果变更可接受，明确批准精确文件列表和 commit message。
 13. 只有在人工批准后才调用 git_commit_and_push。
 14. 确认返回的 branch、remote、commit、push output 和 final status。
-15. PR 创建并审查后，使用 get_pr_sync_readiness 获取只读的 PR merge-consideration 和本地目标分支 sync 证据，再执行任何人工 merge/sync 命令。
+15. PR 创建并审查后，使用 get_pr_sync_readiness 获取只读的 PR merge-consideration 和本地目标分支 sync 证据，再执行任何 merge/sync 动作。
+16. PR 已 merge 且本地 refs 已经是最新之后，只有在希望 bridge 执行基于本地 refs 的窄本地同步时，才调用 git_sync_local_branch_to_origin。
 ```
 
 ## 15. 常见问题
