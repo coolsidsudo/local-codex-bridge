@@ -233,4 +233,17 @@ def build_mcp(config: str | Path | BridgeConfig) -> FastMCP:
             remote=remote,
         )
 
+    @mcp.tool
+    def git_sync_local_branch_to_origin(
+        project_id: str,
+        target_branch: str = "main",
+        remote: str = "origin",
+    ) -> dict[str, Any]:
+        """Sync a local target branch to local origin/<target> after strict safety checks."""
+        return runner.git_sync_local_branch_to_origin(
+            project_id=project_id,
+            target_branch=target_branch,
+            remote=remote,
+        )
+
     return mcp

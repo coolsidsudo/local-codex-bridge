@@ -1989,12 +1989,288 @@ class TaskRunner:
             "local_sync_readiness": sync_readiness,
         }
 
+    def git_sync_local_branch_to_origin(
+        self,
+        project_id: str,
+        target_branch: str = "main",
+        remote: str = "origin",
+    ) -> dict[str, Any]:
+        try:
+            project = self._project(project_id)
+        except ValueError as exc:
+            error = str(exc)
+            return {
+                "status": "blocked_input",
+                "action": "blocked",
+                "error": error,
+                "project_id": project_id,
+                "target_branch": target_branch,
+                "remote": remote,
+                "warnings": [],
+                "blocking_reasons": [error],
+                "executed_commands": [],
+                "limits": self._local_sync_execution_limits(),
+            }
+
+        repo = project.path
+        base: dict[str, Any] = {
+            "project_id": project_id,
+            "name": project.name,
+            "path": str(repo),
+            "target_branch": target_branch,
+            "remote": remote,
+            "warnings": [],
+            "blocking_reasons": [],
+            "executed_commands": [],
+            "limits": self._local_sync_execution_limits(),
+        }
+
+        if remote != "origin":
+            error = "Only remote='origin' is supported"
+            return {
+                **base,
+                "status": "blocked_input",
+                "action": "blocked",
+                "error": error,
+                "blocking_reasons": [error],
+            }
+        if not isinstance(target_branch, str):
+            error = "target_branch must be a string"
+            return {
+                **base,
+                "status": "blocked_input",
+                "action": "blocked",
+                "error": error,
+                "blocking_reasons": [error],
+            }
+
+        target_validation = self._validate_branch_name(repo, target_branch, "target_branch")
+        if target_validation["status"] != "ok":
+            error = target_validation["error"]
+            return {
+                **base,
+                "status": "blocked_input",
+                "action": "blocked",
+                "error": error,
+                "target_branch_validation": target_validation,
+                "blocking_reasons": [error],
+            }
+
+        remote_style = self._is_remote_style_branch(repo, target_validation["name"])
+        if remote_style["status"] != "ok":
+            error = "Could not inspect git remotes while validating target_branch"
+            return {
+                **base,
+                "status": "blocked_git",
+                "action": "blocked",
+                "error": error,
+                "target_branch": target_validation["name"],
+                "target_branch_validation": target_validation,
+                "target_remote_style_check": remote_style,
+                "blocking_reasons": [error],
+            }
+        if remote_style["remote_style"]:
+            error = "target_branch must not be a remote-style branch"
+            return {
+                **base,
+                "status": "blocked_input",
+                "action": "blocked",
+                "error": error,
+                "target_branch": target_validation["name"],
+                "target_branch_validation": target_validation,
+                "target_remote_style_check": remote_style,
+                "blocking_reasons": [error],
+            }
+
+        target = target_validation["name"]
+        base.update(
+            {
+                "target_branch": target,
+                "target_branch_validation": target_validation,
+                "target_remote_style_check": remote_style,
+            }
+        )
+
+        initial = self._collect_local_sync_execution_readiness(repo, target, remote)
+        if initial["status"] == "blocked_git":
+            return {
+                **base,
+                "status": "blocked_git",
+                "action": "blocked",
+                "error": "Could not collect local sync evidence",
+                "before_evidence": initial["evidence"],
+                "warnings": initial["warnings"],
+                "blocking_reasons": initial["blocking_reasons"],
+                "local_sync_readiness": initial["readiness"],
+            }
+        if initial["blocking_reasons"]:
+            return {
+                **base,
+                "status": "blocked_sync",
+                "action": "blocked",
+                "error": "Local target branch is not safe to sync",
+                "before_evidence": initial["evidence"],
+                "warnings": initial["warnings"],
+                "blocking_reasons": initial["blocking_reasons"],
+                "local_sync_readiness": initial["readiness"],
+            }
+
+        relation = initial["evidence"]["relation"]
+        if relation == "equal":
+            return {
+                **base,
+                "status": "ok_noop",
+                "action": "no_op",
+                "before_evidence": initial["evidence"],
+                "after_evidence": initial["evidence"],
+                "warnings": initial["warnings"],
+                "blocking_reasons": [],
+                "local_sync_readiness": initial["readiness"],
+            }
+        if relation != "behind":
+            error = "Local target branch relation is not safe to sync"
+            return {
+                **base,
+                "status": "blocked_sync",
+                "action": "blocked",
+                "error": error,
+                "before_evidence": initial["evidence"],
+                "warnings": initial["warnings"],
+                "blocking_reasons": [error],
+                "local_sync_readiness": initial["readiness"],
+            }
+
+        before = self._collect_local_sync_execution_readiness(repo, target, remote)
+        if not self._local_sync_execution_ready(before, expected_relation="behind"):
+            return {
+                **base,
+                "status": "blocked_sync",
+                "action": "blocked",
+                "error": "Local sync safety re-check failed before mutation",
+                "before_evidence": before["evidence"],
+                "initial_evidence": initial["evidence"],
+                "warnings": before["warnings"],
+                "blocking_reasons": before["blocking_reasons"] or ["Local sync safety re-check failed"],
+                "local_sync_readiness": before["readiness"],
+            }
+
+        executed_commands: list[list[str]] = []
+        switch_cmd = ["git", "switch", target]
+        switch_result = self._run(repo, switch_cmd, timeout=60)
+        executed_commands.append(switch_cmd)
+        if switch_result["returncode"] != 0:
+            after = self._collect_local_sync_execution_readiness(repo, target, remote)
+            return {
+                **base,
+                "status": "blocked_sync",
+                "action": "blocked",
+                "error": "git switch failed",
+                "before_evidence": before["evidence"],
+                "after_evidence": after["evidence"],
+                "warnings": before["warnings"] + after["warnings"],
+                "blocking_reasons": ["git switch failed"],
+                "executed_commands": executed_commands,
+                "mutation_results": {"switch": switch_result},
+                "local_sync_readiness": after["readiness"],
+            }
+
+        intermediate = self._collect_local_sync_execution_readiness(repo, target, remote)
+        if not self._local_sync_execution_ready(
+            intermediate,
+            expected_relation="behind",
+            expected_current_branch=target,
+        ):
+            return {
+                **base,
+                "status": "blocked_sync",
+                "action": "blocked",
+                "error": "Local sync safety check failed after switch",
+                "before_evidence": before["evidence"],
+                "intermediate_evidence": intermediate["evidence"],
+                "warnings": before["warnings"] + intermediate["warnings"],
+                "blocking_reasons": intermediate["blocking_reasons"]
+                or ["Local sync safety check failed after switch"],
+                "executed_commands": executed_commands,
+                "mutation_results": {"switch": switch_result},
+                "local_sync_readiness": intermediate["readiness"],
+            }
+
+        reset_cmd = ["git", "reset", "--hard", f"{remote}/{target}"]
+        reset_result = self._run(repo, reset_cmd, timeout=60)
+        executed_commands.append(reset_cmd)
+        after = self._collect_local_sync_execution_readiness(repo, target, remote)
+        if reset_result["returncode"] != 0:
+            return {
+                **base,
+                "status": "blocked_sync",
+                "action": "blocked",
+                "error": "git reset failed",
+                "before_evidence": before["evidence"],
+                "intermediate_evidence": intermediate["evidence"],
+                "after_evidence": after["evidence"],
+                "warnings": before["warnings"] + intermediate["warnings"] + after["warnings"],
+                "blocking_reasons": ["git reset failed"],
+                "executed_commands": executed_commands,
+                "mutation_results": {"switch": switch_result, "reset": reset_result},
+                "local_sync_readiness": after["readiness"],
+            }
+
+        if not self._local_sync_execution_ready(
+            after,
+            expected_relation="equal",
+            expected_current_branch=target,
+        ):
+            return {
+                **base,
+                "status": "blocked_sync",
+                "action": "blocked",
+                "error": "Post-reset local sync evidence is not clean and equal",
+                "before_evidence": before["evidence"],
+                "intermediate_evidence": intermediate["evidence"],
+                "after_evidence": after["evidence"],
+                "warnings": before["warnings"] + intermediate["warnings"] + after["warnings"],
+                "blocking_reasons": after["blocking_reasons"]
+                or ["Post-reset local sync evidence is not clean and equal"],
+                "executed_commands": executed_commands,
+                "mutation_results": {"switch": switch_result, "reset": reset_result},
+                "local_sync_readiness": after["readiness"],
+            }
+
+        return {
+            **base,
+            "status": "ok_synced",
+            "action": "synced",
+            "before_evidence": before["evidence"],
+            "intermediate_evidence": intermediate["evidence"],
+            "after_evidence": after["evidence"],
+            "warnings": before["warnings"] + intermediate["warnings"] + after["warnings"],
+            "blocking_reasons": [],
+            "executed_commands": executed_commands,
+            "mutation_results": {"switch": switch_result, "reset": reset_result},
+            "local_sync_readiness": after["readiness"],
+        }
+
     def _pr_sync_limits(self) -> dict[str, Any]:
         return {
             "read_only": True,
             "mutation_performed": False,
             "no_merge_authority": True,
             "sync_uses_local_refs_only": True,
+        }
+
+    def _local_sync_execution_limits(self) -> dict[str, Any]:
+        return {
+            "read_only": False,
+            "mutation_scope": ["git switch <target_branch>", "git reset --hard origin/<target_branch>"],
+            "sync_uses_local_refs_only": True,
+            "no_fetch": True,
+            "no_pull": True,
+            "no_push": True,
+            "no_merge": True,
+            "no_pr_mutation": True,
+            "no_branch_deletion": True,
+            "no_tag_work": True,
+            "no_release_work": True,
         }
 
     def _empty_pr_readiness(
@@ -2427,6 +2703,69 @@ class TaskRunner:
                 relation=sync["relation"],
             )
         return sync
+
+    def _collect_local_sync_execution_readiness(
+        self,
+        repo: Path,
+        target_branch: str,
+        remote: str,
+    ) -> dict[str, Any]:
+        local = self._collect_pr_sync_local_evidence(repo)
+        readiness = self._build_local_sync_readiness(
+            repo=repo,
+            target_branch=target_branch,
+            remote=remote,
+            local=local,
+        )
+        evidence = self._local_sync_execution_evidence(local, readiness)
+        return {
+            "status": readiness["status"],
+            "warnings": readiness["warnings"],
+            "blocking_reasons": readiness["blocking_reasons"],
+            "evidence": evidence,
+            "readiness": readiness,
+        }
+
+    def _local_sync_execution_evidence(
+        self,
+        local: dict[str, Any],
+        readiness: dict[str, Any],
+    ) -> dict[str, Any]:
+        return {
+            "current_branch": readiness.get("current_branch"),
+            "head": local.get("head"),
+            "dirty": readiness.get("dirty"),
+            "detached": readiness.get("detached"),
+            "local_target_sha": readiness.get("local_target_sha"),
+            "origin_target_ref": readiness.get("remote_target_ref"),
+            "origin_target_sha": readiness.get("remote_target_sha"),
+            "divergence": readiness.get("divergence"),
+            "relation": readiness.get("relation"),
+            "local_target_has_unique_commits": readiness.get("local_target_has_unique_commits"),
+            "origin_target_has_unique_commits": readiness.get("remote_target_has_unique_commits"),
+            "ready_to_sync_local_target": readiness.get("ready_to_sync_local_target"),
+        }
+
+    def _local_sync_execution_ready(
+        self,
+        check: dict[str, Any],
+        expected_relation: str,
+        expected_current_branch: str | None = None,
+    ) -> bool:
+        evidence = check["evidence"]
+        if check["status"] != "ok" or check["blocking_reasons"]:
+            return False
+        if evidence.get("relation") != expected_relation:
+            return False
+        if evidence.get("dirty") is not False or evidence.get("detached") is not False:
+            return False
+        if evidence.get("local_target_has_unique_commits") is not False:
+            return False
+        if expected_current_branch is not None and evidence.get("current_branch") != expected_current_branch:
+            return False
+        if not evidence.get("local_target_sha") or not evidence.get("origin_target_sha"):
+            return False
+        return True
 
     def _suggest_sync_commands(
         self,
