@@ -219,6 +219,23 @@ def build_mcp(config: str | Path | BridgeConfig) -> FastMCP:
         )
 
     @mcp.tool
+    def github_merge_pr(
+        project_id: str,
+        pr_url_or_number: str | int,
+        merge_method: str = "squash",
+        delete_branch: bool = False,
+        expected_head_sha: str | None = None,
+    ) -> dict[str, Any]:
+        """Merge one human-approved GitHub pull request via fixed gh CLI argv."""
+        return runner.github_merge_pr(
+            project_id=project_id,
+            pr_url_or_number=pr_url_or_number,
+            merge_method=merge_method,
+            delete_branch=delete_branch,
+            expected_head_sha=expected_head_sha,
+        )
+
+    @mcp.tool
     def get_pr_sync_readiness(
         project_id: str,
         pr_url_or_number: str | int | None = None,

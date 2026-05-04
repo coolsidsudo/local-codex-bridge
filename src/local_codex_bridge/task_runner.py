@@ -63,6 +63,8 @@ GITHUB_PR_JSON_FIELDS = ",".join(
         "updatedAt",
     ]
 )
+FULL_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
+GITHUB_MERGE_METHOD_FLAGS = {"squash": "--squash", "merge": "--merge", "rebase": "--rebase"}
 GH_JSON_MAX_CHARS = 60000
 CHECK_PASS_VALUES = {"SUCCESS", "SKIPPED", "NEUTRAL"}
 CHECK_FAIL_VALUES = {
@@ -1816,6 +1818,186 @@ class TaskRunner:
         evidence["pr_readiness"] = pr_readiness
         return {"status": "ok", "pr": canonical["pr"], **evidence}
 
+    def github_merge_pr(
+        self,
+        project_id: str,
+        pr_url_or_number: str | int,
+        merge_method: str = "squash",
+        delete_branch: bool = False,
+        expected_head_sha: str | None = None,
+    ) -> dict[str, Any]:
+        try:
+            project = self._project(project_id)
+        except ValueError as exc:
+            error = str(exc)
+            return {
+                "status": "blocked_input",
+                "error": error,
+                "project_id": project_id,
+                "name": None,
+                "path": None,
+                "requested_pr": pr_url_or_number,
+                "merge_method": merge_method,
+                "delete_branch": delete_branch,
+                "expected_head_sha": expected_head_sha,
+                "matched_head_sha": None,
+                "ready": False,
+                "merge_command_executed": False,
+                "mutation_performed": False,
+                "blocking_reasons": [error],
+                "warnings": [],
+                "limits": self._github_merge_limits(mutation_performed=False),
+            }
+
+        repo = project.path
+        base: dict[str, Any] = {
+            "project_id": project_id,
+            "name": project.name,
+            "path": str(repo),
+            "requested_pr": pr_url_or_number,
+            "merge_method": merge_method,
+            "delete_branch": delete_branch,
+            "expected_head_sha": expected_head_sha,
+            "matched_head_sha": None,
+            "ready": False,
+            "merge_command_executed": False,
+            "mutation_performed": False,
+            "blocking_reasons": [],
+            "warnings": [],
+            "limits": self._github_merge_limits(mutation_performed=False),
+        }
+
+        validation = self._validate_github_merge_inputs(
+            pr_url_or_number=pr_url_or_number,
+            merge_method=merge_method,
+            delete_branch=delete_branch,
+            expected_head_sha=expected_head_sha,
+        )
+        if validation["status"] != "ok":
+            error = validation["error"]
+            return {
+                **base,
+                "status": "blocked_input",
+                "error": error,
+                "blocking_reasons": [error],
+                "input_validation": validation,
+            }
+
+        merge_method = validation["merge_method"]
+        expected_sha = validation["expected_head_sha"]
+        base.update(
+            {
+                "merge_method": merge_method,
+                "delete_branch": delete_branch,
+                "expected_head_sha": expected_sha,
+            }
+        )
+
+        before = self._collect_github_merge_preflight(
+            repo=repo,
+            pr_url_or_number=pr_url_or_number,
+            expected_head_sha=expected_sha,
+        )
+        readiness = before["readiness"]
+        pr = before.get("pr")
+        pr_summary = self._github_pr_summary(pr)
+        matched_head_sha = pr_summary.get("headRefOid")
+        base.update(
+            {
+                "pr": pr_summary,
+                "matched_head_sha": matched_head_sha,
+                "ready": readiness["ready_to_consider_merge"],
+                "blocking_reasons": readiness["blocking_reasons"],
+                "warnings": readiness["warnings"],
+                "before_evidence": before["before_evidence"],
+                "readiness_evidence": readiness,
+            }
+        )
+
+        if before["status"] == "blocked_git":
+            return {
+                **base,
+                "status": "blocked_git",
+                "error": "Could not collect local git evidence for PR merge preflight",
+            }
+        if before["status"] in {"blocked_input", "blocked_github"}:
+            return {
+                **base,
+                "status": before["status"],
+                "error": before["error"],
+            }
+        if readiness["blocking_reasons"]:
+            return {
+                **base,
+                "status": "blocked_readiness",
+                "error": "PR is not ready for controlled merge execution",
+            }
+
+        reference = before["merge_reference"]
+        method_flag = GITHUB_MERGE_METHOD_FLAGS[merge_method]
+        merge_cmd = [
+            "gh",
+            "pr",
+            "merge",
+            reference,
+            method_flag,
+            "--match-head-commit",
+            matched_head_sha,
+        ]
+        if delete_branch:
+            merge_cmd.append("--delete-branch")
+
+        started_at = time.monotonic()
+        merge_result = self._sanitize_command_result(
+            self._run(repo, merge_cmd, timeout=120, max_chars=40000)
+        )
+        merge_result["elapsed_seconds"] = round(time.monotonic() - started_at, 3)
+
+        command_base = {
+            **base,
+            "ready": True,
+            "blocking_reasons": [],
+            "merge_command_executed": True,
+            "merge_command_evidence": merge_result,
+        }
+        if merge_result["returncode"] != 0:
+            warnings = list(base["warnings"])
+            warnings.append(
+                "gh pr merge failed after preflight; check PR status in GitHub before retrying"
+            )
+            return {
+                **command_base,
+                "status": "failed_merge",
+                "error": "gh pr merge failed",
+                "warnings": warnings,
+                "mutation_performed": False,
+                "mutation_state": "unknown_after_failed_merge_command",
+                "limits": self._github_merge_limits(
+                    mutation_performed=False,
+                    mutation_state="unknown_after_failed_merge_command",
+                ),
+            }
+
+        after = self._github_pr_view(repo, before["origin"]["repo_arg"], str(pr_summary["number"]))
+        after_evidence: dict[str, Any] = {"pr_status": after}
+        warnings = list(base["warnings"])
+        after_evidence_error = None
+        if after["status"] != "ok":
+            after_evidence_error = after.get("error", "Could not collect PR status after merge")
+            warnings.append(
+                "gh pr merge succeeded but after-status evidence could not be collected"
+            )
+
+        return {
+            **command_base,
+            "status": "ok_merged",
+            "warnings": warnings,
+            "mutation_performed": True,
+            "limits": self._github_merge_limits(mutation_performed=True),
+            "after_evidence": after_evidence,
+            "after_evidence_error": after_evidence_error,
+        }
+
     def get_pr_sync_readiness(
         self,
         project_id: str,
@@ -2273,6 +2455,187 @@ class TaskRunner:
             "no_release_work": True,
         }
 
+    def _github_merge_limits(
+        self,
+        mutation_performed: bool = False,
+        mutation_state: str | None = None,
+    ) -> dict[str, Any]:
+        limits = {
+            "read_only": False,
+            "mutation_performed": mutation_performed,
+            "mutation_scope": ["gh pr merge <pr> <method_flag> --match-head-commit <sha>"],
+            "no_fetch": True,
+            "no_pull": True,
+            "no_push": True,
+            "no_local_sync": True,
+            "no_arbitrary_branch_cleanup": True,
+            "no_tag_or_release": True,
+            "no_admin_bypass": True,
+            "no_auto_merge": True,
+            "no_broad_gh_passthrough": True,
+        }
+        if mutation_state is not None:
+            limits["mutation_state"] = mutation_state
+        return limits
+
+    def _validate_github_merge_inputs(
+        self,
+        pr_url_or_number: Any,
+        merge_method: Any,
+        delete_branch: Any,
+        expected_head_sha: Any,
+    ) -> dict[str, Any]:
+        if isinstance(pr_url_or_number, bool) or not isinstance(pr_url_or_number, (str, int)):
+            return {"status": "blocked_input", "error": "pr_url_or_number must be a string or int"}
+        if isinstance(pr_url_or_number, str) and not pr_url_or_number.strip():
+            return {"status": "blocked_input", "error": "pr_url_or_number must not be empty"}
+        if isinstance(pr_url_or_number, int) and pr_url_or_number <= 0:
+            return {"status": "blocked_input", "error": "pr_url_or_number must be a positive integer"}
+        if not isinstance(merge_method, str) or merge_method not in GITHUB_MERGE_METHOD_FLAGS:
+            return {
+                "status": "blocked_input",
+                "error": "merge_method must be one of: squash, merge, rebase",
+            }
+        if not isinstance(delete_branch, bool):
+            return {"status": "blocked_input", "error": "delete_branch must be a boolean"}
+
+        normalized_sha = None
+        if expected_head_sha is not None:
+            if not isinstance(expected_head_sha, str):
+                return {
+                    "status": "blocked_input",
+                    "error": "expected_head_sha must be a string when provided",
+                }
+            normalized_sha = expected_head_sha.strip()
+            if not FULL_SHA_RE.fullmatch(normalized_sha):
+                return {
+                    "status": "blocked_input",
+                    "error": "expected_head_sha must be a full 40-character hex commit SHA",
+                }
+
+        return {
+            "status": "ok",
+            "merge_method": merge_method,
+            "expected_head_sha": normalized_sha,
+        }
+
+    def _collect_github_merge_preflight(
+        self,
+        repo: Path,
+        pr_url_or_number: str | int,
+        expected_head_sha: str | None,
+    ) -> dict[str, Any]:
+        local = self._collect_pr_sync_local_evidence(repo)
+        readiness = self._build_pr_merge_readiness(
+            repo=repo,
+            pr_url_or_number=pr_url_or_number,
+            target_branch="main",
+            local=local,
+        )
+        pr = readiness.get("pr")
+        origin = readiness.get("evidence", {}).get("origin")
+        parsed_reference = readiness.get("evidence", {}).get("parsed_pr_reference")
+        canonical_pr = readiness.get("evidence", {}).get("canonical_pr")
+
+        before_evidence = {
+            "local": self._github_merge_local_evidence(local),
+            "pr_status": canonical_pr,
+            "readiness": readiness,
+        }
+
+        if readiness["status"] == "blocked_git":
+            return {
+                "status": "blocked_git",
+                "error": "Could not collect local git evidence",
+                "readiness": readiness,
+                "pr": pr,
+                "before_evidence": before_evidence,
+            }
+        if parsed_reference and parsed_reference.get("status") != "ok":
+            return {
+                "status": "blocked_input",
+                "error": "Invalid PR number or URL",
+                "readiness": readiness,
+                "pr": pr,
+                "before_evidence": before_evidence,
+            }
+        if readiness["status"] != "ok" and not pr:
+            return {
+                "status": "blocked_github",
+                "error": readiness["blocking_reasons"][0] if readiness["blocking_reasons"] else readiness["status"],
+                "readiness": readiness,
+                "pr": pr,
+                "before_evidence": before_evidence,
+            }
+
+        head_sha = pr.get("headRefOid") if isinstance(pr, dict) else None
+        if not isinstance(head_sha, str) or not FULL_SHA_RE.fullmatch(head_sha):
+            readiness["blocking_reasons"].append("PR head SHA is missing or not a full commit SHA")
+        elif expected_head_sha is not None and head_sha != expected_head_sha:
+            readiness["blocking_reasons"].append("expected_head_sha does not match fresh PR head SHA")
+
+        readiness["ready_to_consider_merge"] = not readiness["blocking_reasons"]
+        before_evidence["readiness"] = readiness
+
+        if not origin or not isinstance(origin, dict) or origin.get("status") != "ok":
+            return {
+                "status": "blocked_github",
+                "error": "origin is not a supported GitHub remote",
+                "readiness": readiness,
+                "pr": pr,
+                "before_evidence": before_evidence,
+            }
+        if not parsed_reference or parsed_reference.get("status") != "ok":
+            return {
+                "status": "blocked_input",
+                "error": "Invalid PR number or URL",
+                "readiness": readiness,
+                "pr": pr,
+                "before_evidence": before_evidence,
+            }
+
+        return {
+            "status": "ok",
+            "readiness": readiness,
+            "pr": pr,
+            "origin": origin,
+            "merge_reference": parsed_reference["reference"],
+            "before_evidence": before_evidence,
+        }
+
+    def _github_merge_local_evidence(self, local: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "status": local.get("status"),
+            "git_errors": local.get("git_errors"),
+            "current_branch": local.get("current_branch"),
+            "detached": local.get("detached"),
+            "dirty": local.get("dirty"),
+            "head": local.get("head"),
+            "status_short_branch": local.get("status_short_branch"),
+            "porcelain_status": local.get("porcelain_status"),
+            "current_branch_result": local.get("current_branch_result"),
+            "head_result": local.get("head_result"),
+        }
+
+    def _github_pr_summary(self, pr: Any) -> dict[str, Any]:
+        if not isinstance(pr, dict):
+            return {
+                "number": None,
+                "url": None,
+                "title": None,
+                "baseRefName": None,
+                "headRefName": None,
+                "headRefOid": None,
+            }
+        return {
+            "number": pr.get("number"),
+            "url": pr.get("url"),
+            "title": pr.get("title"),
+            "baseRefName": pr.get("baseRefName"),
+            "headRefName": pr.get("headRefName"),
+            "headRefOid": pr.get("headRefOid"),
+        }
+
     def _empty_pr_readiness(
         self,
         status: str = "ok",
@@ -2372,9 +2735,7 @@ class TaskRunner:
 
     def _initial_pr_readiness_from_local(self, local: dict[str, Any]) -> dict[str, Any]:
         blocking_reasons = list(local.get("git_errors", []))
-        warnings = [
-            "Readiness is advisory evidence only; Local Codex Bridge cannot merge PRs."
-        ]
+        warnings = ["Readiness is conservative advisory evidence only."]
         readiness = self._empty_pr_readiness(
             status="blocked_git" if blocking_reasons else "ok",
             blocking_reasons=blocking_reasons,

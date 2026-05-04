@@ -96,8 +96,12 @@ elif checks == "pending":
     status_check_rollup = [{"name": "ci", "status": "IN_PROGRESS", "conclusion": None}]
 elif checks == "unknown":
     status_check_rollup = [{"name": "ci"}]
+elif checks == "unparseable":
+    status_check_rollup = {"unexpected": "shape"}
 else:
     status_check_rollup = []
+head_sha = os.environ.get("LCB_FAKE_GH_HEAD_SHA", "abc123")
+review_decision = os.environ.get("LCB_FAKE_GH_REVIEW_DECISION", "")
 pr = {
     "number": 123,
     "url": "https://github.com/coolsidsudo/local-codex-bridge/pull/123",
@@ -106,10 +110,10 @@ pr = {
     "isDraft": os.environ.get("LCB_FAKE_GH_PR_DRAFT", "1") == "1",
     "baseRefName": os.environ.get("LCB_FAKE_GH_BASE", default_branch),
     "headRefName": os.environ.get("LCB_FAKE_GH_HEAD_BRANCH", "feature"),
-    "headRefOid": os.environ.get("LCB_FAKE_GH_HEAD_SHA", "abc123"),
+    "headRefOid": None if head_sha == "__NULL__" else head_sha,
     "mergeable": os.environ.get("LCB_FAKE_GH_MERGEABLE", "UNKNOWN"),
     "mergeStateStatus": os.environ.get("LCB_FAKE_GH_MERGE_STATE", "UNKNOWN"),
-    "reviewDecision": os.environ.get("LCB_FAKE_GH_REVIEW_DECISION", ""),
+    "reviewDecision": None if review_decision == "__NULL__" else review_decision,
     "statusCheckRollup": status_check_rollup,
     "updatedAt": "2026-05-02T00:00:00Z",
 }
@@ -133,6 +137,10 @@ elif args[:2] == ["pr", "create"]:
     else:
         print("https://github.com/coolsidsudo/local-codex-bridge/pull/123")
 elif args[:2] == ["pr", "view"]:
+    merged_marker = log + ".merged" if log else ""
+    if scenario == "after_status_fail" and merged_marker and os.path.exists(merged_marker):
+        print("after status failed", file=sys.stderr)
+        sys.exit(1)
     if scenario == "json_fail":
         print("not-json")
     else:
@@ -142,6 +150,14 @@ elif args[:2] == ["pr", "view"]:
         pr["number"] = number
         pr["url"] = f"https://github.com/coolsidsudo/local-codex-bridge/pull/{number}"
         print(json.dumps(pr))
+elif args[:2] == ["pr", "merge"]:
+    if scenario == "merge_fail":
+        print("merge failed", file=sys.stderr)
+        sys.exit(1)
+    if log:
+        with open(log + ".merged", "w", encoding="utf-8") as handle:
+            handle.write("1\n")
+    print("merged")
 else:
     print("unexpected args: " + json.dumps(args), file=sys.stderr)
     sys.exit(2)
@@ -650,6 +666,260 @@ def test_pr_status_gh_failure_includes_not_ready_evidence(
     assert result["status"] == "blocked_gh_auth"
     assert result["pr_readiness"]["status"] == "blocked_gh_auth"
     assert result["pr_readiness"]["ready_to_consider_merge"] is False
+
+
+def merge_commands(log_path: Path) -> list[list[str]]:
+    return [args for args in gh_log(log_path) if args[:2] == ["pr", "merge"]]
+
+
+def assert_safe_merge_argv(args: list[str]) -> None:
+    assert "--admin" not in args
+    assert "--auto" not in args
+    assert "--repo" not in args
+
+
+def test_github_merge_pr_unknown_project_blocked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    runner, _, log_path = make_runner(tmp_path, monkeypatch)
+
+    result = runner.github_merge_pr("missing", 123)
+
+    assert result["status"] == "blocked_input"
+    assert result["merge_command_executed"] is False
+    assert result["mutation_performed"] is False
+    assert merge_commands(log_path) == []
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"pr_url_or_number": None},
+        {"pr_url_or_number": ""},
+        {"pr_url_or_number": "   "},
+        {"pr_url_or_number": 0},
+        {"pr_url_or_number": True},
+        {"pr_url_or_number": 123, "merge_method": "fast-forward"},
+        {"pr_url_or_number": 123, "delete_branch": "false"},
+        {"pr_url_or_number": 123, "expected_head_sha": "abc123"},
+        {"pr_url_or_number": 123, "expected_head_sha": object()},
+    ],
+)
+def test_github_merge_pr_invalid_inputs_block_before_merge(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    kwargs: dict[str, Any],
+) -> None:
+    runner, _, log_path = make_runner(tmp_path, monkeypatch)
+
+    result = runner.github_merge_pr("dummy", **kwargs)
+
+    assert result["status"] == "blocked_input"
+    assert result["merge_command_executed"] is False
+    assert result["mutation_performed"] is False
+    assert merge_commands(log_path) == []
+
+
+@pytest.mark.parametrize(
+    ("env_name", "env_value"),
+    [
+        ("LCB_FAKE_GH_PR_STATE", "CLOSED"),
+        ("LCB_FAKE_GH_PR_DRAFT", "1"),
+        ("LCB_FAKE_GH_HEAD_SHA", "__NULL__"),
+        ("LCB_FAKE_GH_HEAD_SHA", "abc123"),
+        ("LCB_FAKE_GH_REVIEW_DECISION", "CHANGES_REQUESTED"),
+        ("LCB_FAKE_GH_REVIEW_DECISION", "REVIEW_REQUIRED"),
+        ("LCB_FAKE_GH_REVIEW_DECISION", ""),
+        ("LCB_FAKE_GH_REVIEW_DECISION", "__NULL__"),
+        ("LCB_FAKE_GH_REVIEW_DECISION", "UNKNOWN"),
+        ("LCB_FAKE_GH_CHECKS", "failing"),
+        ("LCB_FAKE_GH_CHECKS", "pending"),
+        ("LCB_FAKE_GH_CHECKS", "missing"),
+        ("LCB_FAKE_GH_CHECKS", "unparseable"),
+        ("LCB_FAKE_GH_MERGEABLE", "CONFLICTING"),
+        ("LCB_FAKE_GH_MERGEABLE", "UNKNOWN"),
+        ("LCB_FAKE_GH_MERGE_STATE", "BLOCKED"),
+        ("LCB_FAKE_GH_MERGE_STATE", "UNKNOWN"),
+    ],
+)
+def test_github_merge_pr_readiness_blockers_do_not_run_merge(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    env_name: str,
+    env_value: str,
+) -> None:
+    runner, repo, log_path = make_runner(tmp_path, monkeypatch)
+    set_ready_pr_env(monkeypatch, repo)
+    monkeypatch.setenv(env_name, env_value)
+
+    result = runner.github_merge_pr("dummy", 123)
+
+    assert result["status"] == "blocked_readiness"
+    assert result["ready"] is False
+    assert result["blocking_reasons"]
+    assert result["merge_command_executed"] is False
+    assert result["mutation_performed"] is False
+    assert merge_commands(log_path) == []
+
+
+def test_github_merge_pr_expected_head_sha_mismatch_blocks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner, repo, log_path = make_runner(tmp_path, monkeypatch)
+    set_ready_pr_env(monkeypatch, repo)
+
+    result = runner.github_merge_pr("dummy", 123, expected_head_sha="0" * 40)
+
+    assert result["status"] == "blocked_readiness"
+    assert "expected_head_sha does not match fresh PR head SHA" in result["blocking_reasons"]
+    assert result["merge_command_executed"] is False
+    assert merge_commands(log_path) == []
+
+
+def test_github_merge_pr_dirty_worktree_blocks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    runner, repo, log_path = make_runner(tmp_path, monkeypatch)
+    set_ready_pr_env(monkeypatch, repo)
+    (repo / "tracked.txt").write_text("dirty\n", encoding="utf-8")
+
+    result = runner.github_merge_pr("dummy", 123)
+
+    assert result["status"] == "blocked_readiness"
+    assert "Local worktree is dirty" in result["blocking_reasons"]
+    assert merge_commands(log_path) == []
+
+
+def test_github_merge_pr_detached_repo_blocks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    runner, repo, log_path = make_runner(tmp_path, monkeypatch)
+    set_ready_pr_env(monkeypatch, repo)
+    run(repo, ["git", "checkout", "--detach", "HEAD"])
+
+    result = runner.github_merge_pr("dummy", 123)
+
+    assert result["status"] == "blocked_readiness"
+    assert result["merge_command_executed"] is False
+    assert merge_commands(log_path) == []
+
+
+def test_github_merge_pr_local_branch_mismatch_blocks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner, repo, log_path = make_runner(tmp_path, monkeypatch)
+    set_ready_pr_env(monkeypatch, repo)
+    monkeypatch.setenv("LCB_FAKE_GH_HEAD_BRANCH", "other")
+
+    result = runner.github_merge_pr("dummy", 123)
+
+    assert result["status"] == "blocked_readiness"
+    assert "Local current branch does not match PR head branch" in result["blocking_reasons"]
+    assert merge_commands(log_path) == []
+
+
+def test_github_merge_pr_local_head_mismatch_blocks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner, repo, log_path = make_runner(tmp_path, monkeypatch)
+    set_ready_pr_env(monkeypatch, repo)
+    monkeypatch.setenv("LCB_FAKE_GH_HEAD_SHA", "0" * 40)
+
+    result = runner.github_merge_pr("dummy", 123)
+
+    assert result["status"] == "blocked_readiness"
+    assert "Local HEAD does not match PR head SHA" in result["blocking_reasons"]
+    assert merge_commands(log_path) == []
+
+
+def test_github_merge_pr_default_squash_uses_fixed_match_head_argv(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner, repo, log_path = make_runner(tmp_path, monkeypatch)
+    set_ready_pr_env(monkeypatch, repo)
+    fresh_head = head(repo)
+
+    result = runner.github_merge_pr("dummy", 123, expected_head_sha=f" {fresh_head} ")
+
+    assert result["status"] == "ok_merged"
+    assert result["merge_command_executed"] is True
+    assert result["mutation_performed"] is True
+    assert result["matched_head_sha"] == fresh_head
+    commands = merge_commands(log_path)
+    assert commands == [["pr", "merge", "123", "--squash", "--match-head-commit", fresh_head]]
+    assert "--delete-branch" not in commands[0]
+    assert_safe_merge_argv(commands[0])
+
+
+def test_github_merge_pr_delete_branch_uses_only_gh_delete_flag(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner, repo, log_path = make_runner(tmp_path, monkeypatch)
+    set_ready_pr_env(monkeypatch, repo)
+
+    result = runner.github_merge_pr("dummy", 123, delete_branch=True)
+
+    assert result["status"] == "ok_merged"
+    commands = merge_commands(log_path)
+    assert commands == [
+        ["pr", "merge", "123", "--squash", "--match-head-commit", head(repo), "--delete-branch"]
+    ]
+    assert_safe_merge_argv(commands[0])
+
+
+@pytest.mark.parametrize(("method", "flag"), [("merge", "--merge"), ("rebase", "--rebase")])
+def test_github_merge_pr_method_flags(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    method: str,
+    flag: str,
+) -> None:
+    runner, repo, log_path = make_runner(tmp_path, monkeypatch)
+    set_ready_pr_env(monkeypatch, repo)
+
+    result = runner.github_merge_pr("dummy", 123, merge_method=method)
+
+    assert result["status"] == "ok_merged"
+    commands = merge_commands(log_path)
+    assert commands[0][3] == flag
+    assert_safe_merge_argv(commands[0])
+
+
+def test_github_merge_pr_merge_failure_reports_command_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner, repo, log_path = make_runner(tmp_path, monkeypatch)
+    set_ready_pr_env(monkeypatch, repo)
+    monkeypatch.setenv("LCB_FAKE_GH_SCENARIO", "merge_fail")
+
+    result = runner.github_merge_pr("dummy", 123)
+
+    assert result["status"] == "failed_merge"
+    assert result["merge_command_executed"] is True
+    assert result["mutation_performed"] is False
+    assert result["mutation_state"] == "unknown_after_failed_merge_command"
+    assert result["limits"]["mutation_performed"] is False
+    assert result["limits"]["mutation_state"] == "unknown_after_failed_merge_command"
+    assert result["merge_command_evidence"]["returncode"] == 1
+    assert merge_commands(log_path)
+    assert any("check PR status" in warning for warning in result["warnings"])
+
+
+def test_github_merge_pr_after_status_failure_preserves_success(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner, repo, log_path = make_runner(tmp_path, monkeypatch)
+    set_ready_pr_env(monkeypatch, repo)
+    monkeypatch.setenv("LCB_FAKE_GH_SCENARIO", "after_status_fail")
+
+    result = runner.github_merge_pr("dummy", 123)
+
+    assert result["status"] == "ok_merged"
+    assert result["mutation_performed"] is True
+    assert result["after_evidence_error"]
+    assert any("after-status evidence" in warning for warning in result["warnings"])
+    assert len(merge_commands(log_path)) == 1
 
 
 def test_pr_sync_readiness_ready_pr_with_matching_local_branch_and_head(

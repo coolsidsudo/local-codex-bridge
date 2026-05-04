@@ -11,6 +11,7 @@
 - `get_acceptance_readiness` MCP tool for read-only preflight evidence before a human-approved `git_commit_and_push`.
 - `get_pr_sync_readiness` MCP tool for conservative advisory PR merge-consideration and local target-branch sync readiness evidence.
 - `git_sync_local_branch_to_origin` MCP tool for narrow post-merge local target-branch sync to local `origin/<target>` refs.
+- `github_merge_pr` MCP tool for narrow human-approved GitHub PR merge execution through fixed `gh pr merge` argv with conservative fresh readiness gates.
 - Optional `start_codex_task` review contract guidance for concise Codex implementation summaries.
 - Normalized conservative advisory PR-only readiness evidence in `github_get_pr_status`.
 
