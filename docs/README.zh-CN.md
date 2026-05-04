@@ -69,7 +69,7 @@ GitHub 或其他 VCS host
 - `run_verification_bundle` — 按顺序运行多个已有 allowlist 验证命令，并返回有边界的逐命令证据。
 - `git_commit_and_push` — 在人工批准后，stage 已批准文件、创建一个 commit，并 push 到 `origin` 上的当前分支。
 - `github_create_pr` — 通过已安装的 `gh` CLI，为已经 push 的当前分支创建 GitHub pull request。
-- `github_get_pr_status` — 通过已安装的 `gh` CLI 读取 GitHub pull request 状态和证据。
+- `github_get_pr_status` — 通过已安装的 `gh` CLI 读取 GitHub pull request 状态、证据和规范化的只读 PR readiness 证据。
 - `get_pr_sync_readiness` — 只读报告 PR 是否可供人工考虑 merge，以及本地目标分支是否可同步。
 
 v0 不暴露任意 shell 执行。验证命令必须在每个项目 profile 中显式 allowlist。`git_create_work_branch` 和 `git_commit_and_push` 是 bridge 自有的 Git 操作，不是通用 shell 或通用文件系统工具。
@@ -134,6 +134,8 @@ ChatGPT 规划 / 审查
 - 未发布分支和 remote SHA 不匹配会被拒绝；C2 不增加 push-upstream 权限。
 - 如果当前分支已有 open PR，则返回已有 PR 证据，不创建重复 PR。
 - 新 PR 默认是 draft；允许创建非 draft PR，但 merge 和 auto-merge 仍不在范围内。
+
+`github_get_pr_status` 包含紧凑的规范化 `pr_readiness` 区块，提供 advisory、只读的 PR 证据，例如 draft/open 状态、mergeability、review decision、checks、本地 branch/HEAD 是否匹配，以及本地 dirty 状态。它不包含目标分支 sync readiness，也不返回建议 operator commands。
 
 `get_pr_sync_readiness` 是人工 PR / acceptance 尾部流程的只读 follow-up。它把 `gh` PR 证据和本地 git 证据合并，报告 PR 是否看起来可供人工/operator 考虑 merge，以及本地目标分支（默认 `main`）是否基于本地 refs 看起来可以同步到 `origin/<target>`。它不会 merge、auto-merge、修改 PR、fetch、reset、switch、pull、push、删除分支，或触碰 tags/releases。返回的 operator commands（如果有）只是建议文本，bridge 不会执行它们。
 
