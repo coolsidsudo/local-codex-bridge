@@ -1729,6 +1729,8 @@ class TaskRunner:
     ) -> dict[str, Any]:
         project = self._project(project_id)
         repo = project.path
+        local = self._collect_pr_sync_local_evidence(repo)
+        pr_readiness = self._initial_pr_readiness_from_local(local)
 
         origin = self._github_origin_info(repo)
         evidence: dict[str, Any] = {
@@ -1736,13 +1738,18 @@ class TaskRunner:
             "path": str(repo),
             "origin": origin,
             "requested_pr": pr_url_or_number,
+            "pr_readiness": pr_readiness,
         }
         if origin["status"] != "ok":
+            pr_readiness["status"] = origin["status"]
+            pr_readiness["blocking_reasons"].append("origin is not a supported GitHub remote")
             return {"status": "blocked_remote", "error": "origin is not a supported GitHub remote", **evidence}
 
         gh_ready = self._github_cli_ready(repo)
         evidence["gh"] = gh_ready
         if gh_ready["status"] != "ok":
+            pr_readiness["status"] = gh_ready["status"]
+            pr_readiness["blocking_reasons"].append(gh_ready["error"])
             return {**gh_ready, **evidence}
 
         if pr_url_or_number is None:
@@ -1751,6 +1758,10 @@ class TaskRunner:
             current_branch = branch["stdout"].strip()
             evidence["current_branch"] = current_branch or None
             if branch["returncode"] != 0 or not current_branch:
+                pr_readiness["status"] = "blocked_detached_head"
+                pr_readiness["blocking_reasons"].append(
+                    "Current branch could not be determined for branch PR lookup"
+                )
                 return {
                     "status": "blocked_detached_head",
                     "error": "Current branch could not be determined for branch PR lookup",
@@ -1759,26 +1770,50 @@ class TaskRunner:
             prs = self._github_prs_for_branch(repo, origin["repo_arg"], current_branch)
             evidence["prs_for_branch"] = prs
             if prs["status"] != "ok":
+                pr_readiness["status"] = prs["status"]
+                pr_readiness["blocking_reasons"].append(prs["error"])
                 return {**prs, **evidence}
             if not prs["prs"]:
+                pr_readiness["status"] = "no_pr"
+                pr_readiness["blocking_reasons"].append("No open PR found for current branch")
                 return {"status": "no_pr", "error": "No open PR found for current branch", **evidence}
             if len(prs["prs"]) > 1:
+                pr_readiness["status"] = "blocked_ambiguous_pr"
+                pr_readiness["blocking_reasons"].append("Multiple open PRs matched the current branch")
                 return {
                     "status": "blocked_ambiguous_pr",
                     "error": "Multiple open PRs matched the current branch",
                     **evidence,
                 }
+            pr_readiness = self._finalize_pr_readiness_from_pr(
+                readiness=pr_readiness,
+                pr=prs["prs"][0],
+                local=local,
+                target_branch=None,
+            )
+            evidence["pr_readiness"] = pr_readiness
             return {"status": "ok", "pr": prs["prs"][0], **evidence}
 
         parsed = self._parse_pr_reference(pr_url_or_number, origin["owner"], origin["repo"])
         evidence["parsed_pr_reference"] = parsed
         if parsed["status"] != "ok":
+            pr_readiness["status"] = "blocked_input"
+            pr_readiness["blocking_reasons"].append("Invalid PR number or URL")
             return {"status": "blocked_input", "error": "Invalid PR number or URL", **evidence}
 
         canonical = self._github_pr_view(repo, origin["repo_arg"], parsed["reference"])
         evidence["canonical_pr"] = canonical
         if canonical["status"] != "ok":
+            pr_readiness["status"] = canonical["status"]
+            pr_readiness["blocking_reasons"].append(canonical["error"])
             return {**canonical, **evidence}
+        pr_readiness = self._finalize_pr_readiness_from_pr(
+            readiness=pr_readiness,
+            pr=canonical["pr"],
+            local=local,
+            target_branch=None,
+        )
+        evidence["pr_readiness"] = pr_readiness
         return {"status": "ok", "pr": canonical["pr"], **evidence}
 
     def get_pr_sync_readiness(
@@ -2059,19 +2094,13 @@ class TaskRunner:
             "remotes": remotes,
         }
 
-    def _build_pr_merge_readiness(
-        self,
-        repo: Path,
-        pr_url_or_number: str | int | None,
-        target_branch: str,
-        local: dict[str, Any],
-    ) -> dict[str, Any]:
+    def _initial_pr_readiness_from_local(self, local: dict[str, Any]) -> dict[str, Any]:
         blocking_reasons = list(local.get("git_errors", []))
         warnings = [
             "Readiness is advisory evidence only; Local Codex Bridge cannot merge PRs."
         ]
         readiness = self._empty_pr_readiness(
-            status="ok",
+            status="blocked_git" if blocking_reasons else "ok",
             blocking_reasons=blocking_reasons,
             warnings=warnings,
         )
@@ -2089,8 +2118,95 @@ class TaskRunner:
                 },
             }
         )
-        if blocking_reasons:
-            readiness["status"] = "blocked_git"
+        return readiness
+
+    def _finalize_pr_readiness_from_pr(
+        self,
+        readiness: dict[str, Any],
+        pr: dict[str, Any],
+        local: dict[str, Any],
+        target_branch: str | None,
+    ) -> dict[str, Any]:
+        check_summary = self._summarize_status_check_rollup(pr.get("statusCheckRollup"))
+        state = pr.get("state")
+        is_draft = pr.get("isDraft")
+        base_branch = pr.get("baseRefName")
+        head_branch = pr.get("headRefName")
+        head_sha = pr.get("headRefOid")
+        mergeable = pr.get("mergeable")
+        merge_state_status = pr.get("mergeStateStatus")
+        review_decision = pr.get("reviewDecision")
+        local_branch_matches = (
+            local.get("current_branch") == head_branch
+            if local.get("current_branch") is not None and isinstance(head_branch, str)
+            else None
+        )
+        local_head_matches = (
+            local.get("head") == head_sha
+            if local.get("head") is not None and isinstance(head_sha, str)
+            else None
+        )
+
+        readiness.update(
+            {
+                "number": pr.get("number"),
+                "url": pr.get("url"),
+                "state": state,
+                "is_draft": is_draft,
+                "base_branch": base_branch,
+                "head_branch": head_branch,
+                "head_sha": head_sha,
+                "mergeable": mergeable,
+                "merge_state_status": merge_state_status,
+                "review_decision": review_decision,
+                "check_summary": check_summary,
+                "local_branch_matches_pr_head": local_branch_matches,
+                "local_head_matches_pr_head_sha": local_head_matches,
+                "pr": pr,
+            }
+        )
+
+        if state != "OPEN":
+            readiness["blocking_reasons"].append("PR is not open")
+        if is_draft is not False:
+            readiness["blocking_reasons"].append("PR is draft or draft status is unknown")
+        if target_branch is not None and base_branch != target_branch:
+            readiness["blocking_reasons"].append("PR base branch does not match target_branch")
+        if mergeable != "MERGEABLE":
+            readiness["blocking_reasons"].append("PR mergeability is not confirmed mergeable")
+        if merge_state_status != "CLEAN":
+            readiness["blocking_reasons"].append("PR merge state is not clean")
+        if check_summary["status"] != "passing":
+            readiness["blocking_reasons"].append("PR checks are not confirmed passing")
+            if check_summary["status"] in {"missing", "unknown"}:
+                readiness["warnings"].append("Missing or unknown check evidence is treated as not ready")
+        if review_decision != "APPROVED":
+            if review_decision in BLOCKING_REVIEW_DECISIONS:
+                readiness["blocking_reasons"].append("PR review decision is blocking")
+            else:
+                readiness["blocking_reasons"].append("PR review decision is missing or unknown")
+                readiness["warnings"].append("Missing review-decision evidence is treated as not ready")
+        if local.get("dirty"):
+            readiness["blocking_reasons"].append("Local worktree is dirty")
+        if local.get("detached"):
+            readiness["blocking_reasons"].append("Local repository is detached or current branch is unknown")
+        if local_branch_matches is not True:
+            readiness["blocking_reasons"].append("Local current branch does not match PR head branch")
+        if local_head_matches is not True:
+            readiness["blocking_reasons"].append("Local HEAD does not match PR head SHA")
+
+        readiness["ready_to_consider_merge"] = not readiness["blocking_reasons"]
+        return readiness
+
+    def _build_pr_merge_readiness(
+        self,
+        repo: Path,
+        pr_url_or_number: str | int | None,
+        target_branch: str,
+        local: dict[str, Any],
+    ) -> dict[str, Any]:
+        readiness = self._initial_pr_readiness_from_local(local)
+        if readiness["blocking_reasons"]:
             return readiness
 
         origin = self._github_origin_info(repo)
@@ -2145,77 +2261,12 @@ class TaskRunner:
                 readiness["blocking_reasons"].append(pr_result["error"])
                 return readiness
 
-        pr = pr_result["pr"]
-        check_summary = self._summarize_status_check_rollup(pr.get("statusCheckRollup"))
-        state = pr.get("state")
-        is_draft = pr.get("isDraft")
-        base_branch = pr.get("baseRefName")
-        head_branch = pr.get("headRefName")
-        head_sha = pr.get("headRefOid")
-        mergeable = pr.get("mergeable")
-        merge_state_status = pr.get("mergeStateStatus")
-        review_decision = pr.get("reviewDecision")
-        local_branch_matches = (
-            local.get("current_branch") == head_branch
-            if local.get("current_branch") is not None and isinstance(head_branch, str)
-            else None
+        return self._finalize_pr_readiness_from_pr(
+            readiness=readiness,
+            pr=pr_result["pr"],
+            local=local,
+            target_branch=target_branch,
         )
-        local_head_matches = (
-            local.get("head") == head_sha
-            if local.get("head") is not None and isinstance(head_sha, str)
-            else None
-        )
-
-        readiness.update(
-            {
-                "number": pr.get("number"),
-                "url": pr.get("url"),
-                "state": state,
-                "is_draft": is_draft,
-                "base_branch": base_branch,
-                "head_branch": head_branch,
-                "head_sha": head_sha,
-                "mergeable": mergeable,
-                "merge_state_status": merge_state_status,
-                "review_decision": review_decision,
-                "check_summary": check_summary,
-                "local_branch_matches_pr_head": local_branch_matches,
-                "local_head_matches_pr_head_sha": local_head_matches,
-                "pr": pr,
-            }
-        )
-
-        if state != "OPEN":
-            readiness["blocking_reasons"].append("PR is not open")
-        if is_draft is not False:
-            readiness["blocking_reasons"].append("PR is draft or draft status is unknown")
-        if base_branch != target_branch:
-            readiness["blocking_reasons"].append("PR base branch does not match target_branch")
-        if mergeable != "MERGEABLE":
-            readiness["blocking_reasons"].append("PR mergeability is not confirmed mergeable")
-        if merge_state_status != "CLEAN":
-            readiness["blocking_reasons"].append("PR merge state is not clean")
-        if check_summary["status"] != "passing":
-            readiness["blocking_reasons"].append("PR checks are not confirmed passing")
-            if check_summary["status"] in {"missing", "unknown"}:
-                readiness["warnings"].append("Missing or unknown check evidence is treated as not ready")
-        if review_decision != "APPROVED":
-            if review_decision in BLOCKING_REVIEW_DECISIONS:
-                readiness["blocking_reasons"].append("PR review decision is blocking")
-            else:
-                readiness["blocking_reasons"].append("PR review decision is missing or unknown")
-                readiness["warnings"].append("Missing review-decision evidence is treated as not ready")
-        if local.get("dirty"):
-            readiness["blocking_reasons"].append("Local worktree is dirty")
-        if local.get("detached"):
-            readiness["blocking_reasons"].append("Local repository is detached or current branch is unknown")
-        if local_branch_matches is not True:
-            readiness["blocking_reasons"].append("Local current branch does not match PR head branch")
-        if local_head_matches is not True:
-            readiness["blocking_reasons"].append("Local HEAD does not match PR head SHA")
-
-        readiness["ready_to_consider_merge"] = not readiness["blocking_reasons"]
-        return readiness
 
     def _summarize_status_check_rollup(self, rollup: Any) -> dict[str, Any]:
         if not isinstance(rollup, list):

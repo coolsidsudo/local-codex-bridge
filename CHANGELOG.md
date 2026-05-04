@@ -11,6 +11,7 @@
 - `get_acceptance_readiness` MCP tool for read-only preflight evidence before a human-approved `git_commit_and_push`.
 - `get_pr_sync_readiness` MCP tool for read-only PR merge-consideration and local target-branch sync readiness evidence.
 - Optional `start_codex_task` review contract guidance for concise Codex implementation summaries.
+- Normalized read-only PR readiness evidence in `github_get_pr_status`.
 
 ## [0.2.0] - 2026-05-02
 

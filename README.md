@@ -71,7 +71,7 @@ The tool surface is intentionally conservative:
 - `run_verification_bundle` — run multiple existing allowlisted verification commands sequentially with bounded per-command evidence.
 - `git_commit_and_push` — after human approval, stage approved files, create one commit, and push it to the current branch on `origin`.
 - `github_create_pr` — create a GitHub pull request for an already-pushed current branch via the installed `gh` CLI.
-- `github_get_pr_status` — read GitHub pull request status/evidence via the installed `gh` CLI.
+- `github_get_pr_status` — read GitHub pull request status/evidence plus normalized read-only PR readiness evidence via the installed `gh` CLI.
 - `get_pr_sync_readiness` — read-only evidence for PR merge consideration and local target-branch sync readiness.
 
 The bridge does **not** expose arbitrary shell execution in v0. Verification commands are allowlisted per project. `git_create_work_branch` and `git_commit_and_push` are bridge-owned Git operations, not general shell or filesystem tools.
@@ -136,6 +136,8 @@ Safeguards:
 - Unpublished branches and remote SHA mismatches are refused; C2 does not add push-upstream authority.
 - If an open PR already exists for the current branch, the existing PR evidence is returned instead of creating a duplicate.
 - New PRs are drafts by default; non-draft creation is allowed, but merge and auto-merge remain out of scope.
+
+`github_get_pr_status` includes a compact normalized `pr_readiness` section with advisory, read-only PR evidence such as draft/open state, mergeability, review decision, checks, local branch/HEAD match, and local dirty state. It does not include target-branch sync readiness or suggested operator commands.
 
 `get_pr_sync_readiness` is a read-only follow-up for the manual PR/acceptance tail. It combines `gh` PR evidence with local git evidence to report whether a PR appears ready for a human/operator to consider merging and whether a local target branch, by default `main`, appears safe to sync to `origin/<target>` using local refs only. It does not merge, auto-merge, mutate PRs, fetch, reset, switch, pull, push, delete branches, or touch tags/releases. Suggested operator commands, when present, are advisory text only and are not executed by the bridge.
 
