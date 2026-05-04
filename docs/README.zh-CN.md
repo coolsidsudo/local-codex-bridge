@@ -4,6 +4,14 @@
 
 Local Codex Bridge 是一个基于项目 profile 的本地 MCP 服务器。它允许 ChatGPT 启动并检查你自己电脑上的 **本地 Codex CLI** 任务。
 
+LCB 有意分成几层：
+
+- **Core bridge**：project profiles、本地 Codex task 执行、task logs、repo status、changed-file inspection，以及 allowlisted verification。
+- **Controlled actions**：可选的、由 bridge 拥有的 Git/GitHub mutation tools，例如 commit/push、PR creation、PR merge 和 post-merge local sync。因为这些工具会改变带有权限意义的状态，所以它们带有硬 safety gates。
+- **Engineering-control workflow**：可选的 review contracts、readiness evidence 和 runbook guidance，适合希望在 ChatGPT ↔ Codex 工程循环中加入更严格审查与验收纪律的 operator。
+
+你可以只把 LCB 当作轻量 bridge 层来使用。Engineering-control workflow 并不是每个用户或团队都必须采用；它是为希望围绕本地 Codex 工作采用保守 review / acceptance discipline 的用户提供的可选 operating mode。
+
 它适合这样的工作流：你不想使用云端 Codex 作为执行器，而是希望使用本地仓库访问、本地 git remotes，以及由操作者控制的 Codex 模型，例如本地 Codex CLI 支持的 `gpt-5.5`。
 
 Local Codex Bridge 是一个独立、通用的开发者 MCP bridge。它不假设任何特定下游项目；它应支持任何已配置的本地仓库 profile。
@@ -50,7 +58,7 @@ GitHub 或其他 VCS host
 
 ## 工具接口
 
-工具接口刻意保持保守：
+工具接口刻意保持保守。Core bridge tools 可以单独使用；controlled actions 和 engineering-control helpers 是给更严格 workflow 使用的可选扩展：
 
 - `list_projects` — 列出已配置的项目 profiles。
 - `get_project_status` — 返回项目的 git status、HEAD 和 remotes。
@@ -499,7 +507,9 @@ Smoke test only. Do not edit files.
 7. Call get_git_diff and confirm no files changed.
 ```
 
-## 14. 日常使用检查清单
+## 14. Optional engineering-control workflow
+
+这个 workflow 推荐给希望采用更严格 engineering-control loop 的 operator。只想把 LCB 当作轻量 ChatGPT ↔ local Codex bridge 时，并不要求采用这一套流程。
 
 开始真正实现任务之前：
 

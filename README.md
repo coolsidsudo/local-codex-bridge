@@ -4,6 +4,14 @@
 
 Local Codex Bridge is a small, project-profile-based MCP server that lets ChatGPT start and inspect **local Codex CLI** tasks on your own machine.
 
+LCB is intentionally layered:
+
+- **Core bridge**: project profiles, local Codex task execution, task logs, repo status, changed-file inspection, and allowlisted verification.
+- **Controlled actions**: optional bridge-owned Git/GitHub mutation tools such as commit/push, PR creation, PR merge, and post-merge local sync. These tools add hard safety gates because they change authority-bearing state.
+- **Engineering-control workflow**: optional review contracts, readiness evidence, and runbook guidance for operators who want a stricter ChatGPT ↔ Codex engineering loop.
+
+You can use LCB as only the lightweight bridge layer. The engineering-control workflow is not required for every user or team; it is provided as an optional operating mode for people who want conservative review and acceptance discipline around local Codex work.
+
 It is designed for workflows where cloud Codex is not the right executor because you want local repository access, local git remotes, and an operator-controlled Codex model such as `gpt-5.5` when your local Codex CLI supports it.
 
 Local Codex Bridge is an independent, general-purpose developer MCP bridge. It does not assume any downstream project; it works with any configured local repository profile.
@@ -50,7 +58,7 @@ GitHub or another VCS host
 
 ## Tool surface
 
-The tool surface is intentionally conservative:
+The tool surface is intentionally conservative. The core bridge tools can be used on their own; controlled actions and engineering-control helpers are optional extensions for stricter workflows:
 
 - `list_projects` — list configured project profiles.
 - `get_project_status` — report git status, HEAD, and remotes for a project.
@@ -501,7 +509,9 @@ Smoke test only. Do not edit files.
 7. Call get_git_diff and confirm no files changed.
 ```
 
-## 14. Normal operating checklist
+## 14. Optional engineering-control workflow
+
+This workflow is recommended for operators who want a stricter engineering-control loop. It is not required when you only want LCB to act as a lightweight ChatGPT ↔ local Codex bridge.
 
 Before starting real implementation work:
 
