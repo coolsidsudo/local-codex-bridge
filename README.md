@@ -20,6 +20,7 @@ More detail:
 
 - [Product shape](docs/PRODUCT_SHAPE.md) — product-boundary source of truth.
 - [Engineering-control workflow](docs/ENGINEERING_CONTROL.md) — optional strict workflow guidance.
+- [Full controlled-loop smoke runbook](docs/FULL_LOOP_SMOKE.md) — optional maintainer release-smoke guidance for the complete controlled loop.
 - [Tool profiles design](docs/TOOL_PROFILES.md) — design-only notes for possible future runtime profiles; not implemented today.
 
 ## Why this exists
@@ -49,7 +50,7 @@ Local Codex Bridge
   -> runs on the operator's machine
   -> exposes configured project profiles and allowlisted operations
   -> invokes local Codex CLI inside the selected repo
-  -> optionally performs controlled Git/GitHub actions when explicitly used
+  -> optionally performs controlled branch, commit/push, PR, merge, and local sync actions when explicitly used
 
 Local Codex CLI
   -> runs with the local model/config chosen by the operator
@@ -497,7 +498,7 @@ Read the structured diagnostics. Common causes include an empty file list, blank
 
 ## 16. Security notes
 
-This bridge can cause local Codex to modify files in configured repositories and can perform a controlled acceptance commit/push after explicit human approval. Treat it as powerful local automation.
+This bridge can cause local Codex to modify files in configured repositories. When optional controlled action tools are explicitly used, it can also create local work branches, commit and push approved files, create GitHub PRs, merge approved PRs, and sync a local target branch to `origin/<target>`. Treat it as powerful local automation.
 
 Recommended defaults:
 
@@ -506,6 +507,7 @@ Recommended defaults:
 - Configure only repos you are willing to let ChatGPT/Codex work on.
 - Keep verification commands allowlisted.
 - Review staged/unstaged diffs, bounded untracked previews, and verification output before accepting changes.
+- Use mutation tools only after explicit human approval of the exact operation, files, message, PR, merge method, or sync target involved.
 - Use `git_commit_and_push` only for reviewed and approved files.
 - Do not pass secrets in prompts.
 - Do not publish temporary tunnel URLs, auth env vars, or bearer tokens in public issues or docs.
