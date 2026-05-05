@@ -15,6 +15,11 @@
 - Optional `start_codex_task` review contract guidance for concise Codex implementation summaries.
 - Normalized conservative advisory PR-only readiness evidence in `github_get_pr_status`.
 
+### Changed
+
+- README/docs restructuring around core bridge versus optional engineering control, keeping LCB framed as a lightweight bridge first.
+- Added optional engineering-control workflow guidance and design-only tool profile documentation.
+
 ## [0.2.0] - 2026-05-02
 
 ### Added

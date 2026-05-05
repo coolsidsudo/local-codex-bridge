@@ -2,19 +2,25 @@
 
 [English](README.md) | [简体中文](docs/README.zh-CN.md)
 
-Local Codex Bridge is a small, project-profile-based MCP server that lets ChatGPT start and inspect **local Codex CLI** tasks on your own machine.
-
-LCB is intentionally layered:
-
-- **Core bridge**: project profiles, local Codex task execution, task logs, repo status, changed-file inspection, and allowlisted verification.
-- **Controlled actions**: optional bridge-owned Git/GitHub mutation tools such as commit/push, PR creation, PR merge, and post-merge local sync. These tools add hard safety gates because they change authority-bearing state.
-- **Engineering-control workflow**: optional review contracts, readiness evidence, and runbook guidance for operators who want a stricter ChatGPT ↔ Codex engineering loop.
-
-You can use LCB as only the lightweight bridge layer. The engineering-control workflow is not required for every user or team; it is provided as an optional operating mode for people who want conservative review and acceptance discipline around local Codex work.
+Local Codex Bridge is a lightweight local MCP bridge for ChatGPT ↔ Codex workflows. It lets ChatGPT start and inspect **local Codex CLI** tasks against configured local repository profiles without giving ChatGPT broad local machine authority.
 
 It is designed for workflows where cloud Codex is not the right executor because you want local repository access, local git remotes, and an operator-controlled Codex model such as `gpt-5.5` when your local Codex CLI supports it.
 
-Local Codex Bridge is an independent, general-purpose developer MCP bridge. It does not assume any downstream project; it works with any configured local repository profile.
+Local Codex Bridge is independent and project-agnostic. It does not assume a downstream project, a required PR workflow, or a personal engineering methodology.
+
+## Product layers
+
+LCB should read as a bridge first:
+
+- **Core bridge** is the default mental model: project profiles, local Codex task execution, task logs, repo status, changed-file inspection, and allowlisted verification. You can use only this layer.
+- **Controlled actions** are optional bridge-owned mutation tools for users who want LCB to handle branch creation, commit/push, PR creation, PR merge, or post-merge local sync. The capabilities are optional, but their runtime safety gates are mandatory when used because they protect real authority boundaries.
+- **Engineering-control workflow** is optional guidance for stricter ChatGPT ↔ Codex loops: review contracts, readiness checks, evidence-first review, human approval gates, and operating checklists. It is not required for lightweight bridge usage.
+
+More detail:
+
+- [Product shape](docs/PRODUCT_SHAPE.md) — product-boundary source of truth.
+- [Engineering-control workflow](docs/ENGINEERING_CONTROL.md) — optional strict workflow guidance.
+- [Tool profiles design](docs/TOOL_PROFILES.md) — design-only notes for possible future runtime profiles; not implemented today.
 
 ## Why this exists
 
@@ -31,21 +37,19 @@ That gives ChatGPT a narrow, inspectable tool surface while keeping Codex execut
 ```text
 Human
   -> starts the bridge server and secure HTTPS tunnel once per work session
-  -> reviews diffs and verification output before accepting changes
+  -> reviews evidence before accepting authority-changing steps
 
 ChatGPT
   -> connects through a custom MCP connector
   -> verifies project profile, git status, HEAD, and remotes
   -> starts bounded local Codex tasks
-  -> reads task logs, diffs, and verification output
-  -> reviews the result and asks for human approval before acceptance commit/push
+  -> reads task logs, changed-file evidence, diffs, and verification output
 
 Local Codex Bridge
   -> runs on the operator's machine
   -> exposes configured project profiles and allowlisted operations
   -> invokes local Codex CLI inside the selected repo
-  -> can create a controlled local work branch before edits
-  -> can perform a controlled, human-approved git add/commit/push for approved files
+  -> optionally performs controlled Git/GitHub actions when explicitly used
 
 Local Codex CLI
   -> runs with the local model/config chosen by the operator
@@ -58,102 +62,50 @@ GitHub or another VCS host
 
 ## Tool surface
 
-The tool surface is intentionally conservative. The core bridge tools can be used on their own; controlled actions and engineering-control helpers are optional extensions for stricter workflows:
+The current runtime exposes the following tools. Runtime profiles are not implemented yet; see [docs/TOOL_PROFILES.md](docs/TOOL_PROFILES.md) for design-only profile notes.
+
+### Core bridge tools
+
+These tools are enough to use LCB as a lightweight bridge:
 
 - `list_projects` — list configured project profiles.
 - `get_project_status` — report git status, HEAD, and remotes for a project.
-- `start_codex_task` — start `codex exec` in a configured project. Optional
-  `review_contract` appends bridge-owned guidance asking Codex for concise
-  implementation summaries instead of full diffs or full file contents.
+- `start_codex_task` — start `codex exec` in a configured project. Optional `review_contract` appends bridge-owned guidance for concise review-oriented summaries.
 - `get_task` — read task metadata and stdout/stderr tails.
 - `list_tasks` — list recent bridge task records.
 - `abort_task` — terminate a running local Codex process.
-- `get_review_package` — return a compact read-only changed-file index with status/stat evidence, without full diffs or full file contents.
-- `get_changed_file_diff` — return one bounded targeted diff for a changed/staged/untracked file after reviewing the package index.
-- `get_changed_file_text` — return bounded UTF-8 text for one changed/staged/untracked file after targeted diff review.
-- `get_git_diff` — inspect git status, unstaged/staged diffs, and bounded untracked file previews.
 - `git_get_branch_status` — report current branch, dirty state, HEAD, remotes, upstream, and ahead/behind evidence.
-- `git_create_work_branch` — create and switch to a new local work branch from an existing local base branch.
-- `get_acceptance_readiness` — read-only preflight for whether the current repo state appears ready for a human-approved `git_commit_and_push`.
+- `get_git_diff` — inspect git status, unstaged/staged diffs, and bounded untracked file previews.
+- `get_review_package` — return a compact read-only changed-file index with status/stat evidence, without full diffs or full file contents.
+- `get_changed_file_diff` — return one bounded targeted diff for a changed/staged/untracked file.
+- `get_changed_file_text` — return bounded UTF-8 text for one changed/staged/untracked file.
 - `run_verification` — run an allowlisted verification command.
 - `run_verification_bundle` — run multiple configured verification keys sequentially with bounded per-command evidence.
+
+### Optional controlled action tools
+
+These tools mutate authority-bearing state. They are optional capabilities, but their safety gates are not optional when called:
+
+- `git_create_work_branch` — create and switch to a new local work branch from an existing local base branch.
 - `git_commit_and_push` — after human approval, stage approved files, create one commit, and push it to the current branch on `origin`.
 - `github_create_pr` — create a GitHub pull request for an already-pushed current branch via the installed `gh` CLI.
-- `github_get_pr_status` — read GitHub pull request status/evidence plus conservative advisory PR-only readiness evidence via the installed `gh` CLI.
 - `github_merge_pr` — after human approval, merge one ready GitHub pull request via fixed `gh pr merge` argv.
-- `get_pr_sync_readiness` — read-only advisory evidence combining PR readiness with local target-branch sync readiness.
 - `git_sync_local_branch_to_origin` — after review, sync a clean local target branch to its local `origin/<target>` ref without fetching, pulling, pushing, merging, or mutating PRs.
 
-The bridge does **not** expose arbitrary shell execution in v0. Verification commands are allowlisted per project. `git_create_work_branch` and `git_commit_and_push` are bridge-owned Git operations, not general shell or filesystem tools.
+### Optional engineering-control / readiness helpers
+
+These tools and options support stricter review loops but do not make that workflow mandatory:
+
+- `start_codex_task` with `review_contract: true` — asks Codex for concise implementation summaries instead of full diffs or full file contents. This is behavior guidance, not a security boundary.
+- `get_acceptance_readiness` — read-only preflight for whether the current repo state appears ready for a human-approved `git_commit_and_push`.
+- `github_get_pr_status` — read GitHub pull request status/evidence plus conservative advisory PR-only readiness evidence via the installed `gh` CLI.
+- `get_pr_sync_readiness` — read-only advisory evidence combining PR readiness with local target-branch sync readiness.
+
+The bridge does **not** expose arbitrary shell execution in v0. Verification commands are allowlisted per project. Bridge-owned Git/GitHub tools use fixed argv and structured `blocked_*` diagnostics for unsafe input or state.
 
 The GitHub PR tools use `gh` as an external substrate. Local Codex Bridge does not implement native GitHub API/token handling and does not store, print, or manage GitHub tokens.
 
-The `start_codex_task` review contract is behavior guidance only, not a security boundary. ChatGPT and human reviewers should inspect actual repository state, verification evidence, and readiness evidence through Local Codex Bridge tools rather than trusting Codex summaries, pasted diffs, or pasted file contents.
-
-## Controlled branch workflow
-
-`git_create_work_branch` is intended to move a clean configured repo onto a safe feature/work branch before Codex edits begin. Its safeguards include:
-
-- It accepts only local branch names and does not hard-code `main` as a universal base.
-- If `base_branch` is omitted, it uses the current checked-out branch.
-- `base_branch` must be an existing local branch; remote-style bases such as `origin/main`, full refs such as `refs/heads/main`, and `HEAD` are refused.
-- The target branch must not already exist; switching existing branches is deferred.
-- The worktree must be clean according to `git status --porcelain=v1 --untracked-files=normal`.
-- Detached HEAD is refused.
-- Branch names must pass conservative Local Codex Bridge validation and `git check-ref-format --branch`.
-- It creates and checks out the new branch locally, but does not push, merge, delete branches, create PRs, or touch tags.
-
-## Controlled acceptance flow
-
-The intended acceptance workflow is:
-
-```text
-ChatGPT plans/reviews
-  -> local Codex CLI edits a configured repo
-  -> ChatGPT reviews the package index, targeted diffs, and verification output
-  -> ChatGPT checks read-only acceptance readiness for the approved file set
-  -> human accepts
-  -> Local Codex Bridge performs controlled git add/commit/push
-```
-
-`git_commit_and_push` should only be called after the human has reviewed the exact diff and verification evidence from `get_git_diff` and `run_verification` or `run_verification_bundle`. `get_acceptance_readiness` is a read-only preflight for the approved file set: it reports current branch/HEAD/remotes, staged/unstaged/untracked files, approved-file coverage, origin/upstream evidence when available, and whether `git_commit_and_push` would likely block. It does not stage, commit, push, fetch, mutate branches, create PRs, or touch tags/releases. `run_verification_bundle` accepts configured verification keys only, runs their fixed allowlisted argv arrays sequentially with `shell=False`, and returns bounded per-command stdout/stderr evidence; the bundle orchestration adds no Git/GitHub/PR/tag/release mutation authority, but actual side effects are those of the configured allowlisted commands, so operators should configure verification keys as read-only commands when they want read-only verification semantics. For a first-pass review index, `get_review_package` reports branch/HEAD/remotes, status/stat evidence, changed-file classifications, and bounded untracked preview metadata without returning full diffs or full file contents. `get_changed_file_diff` is a read-only follow-up for one changed/staged/untracked path; it uses targeted fixed git commands, refuses unsafe paths and binary content, and bounds output. `get_changed_file_text` is a further read-only follow-up for bounded UTF-8 content of one currently changed/staged/untracked file; it refuses unchanged paths, deleted/no-content paths, binary/invalid UTF-8 content, unsafe paths, directories, symlinks, and non-regular files. `get_git_diff` distinguishes unstaged and staged changes and includes bounded text previews for untracked files when safe. Its safeguards include:
-
-- Only configured project roots are accessible.
-- No arbitrary shell execution is exposed.
-- Verification commands remain allowlisted per project.
-- Remote is currently limited to `origin`.
-- If `branch` is omitted, the bridge uses the current checked-out branch.
-- If `branch` is provided, it must match the current checked-out branch.
-- Approved file paths are normalized to repo-relative paths and must stay inside the configured project root.
-- Git staging uses literal pathspec handling so pathspec magic such as `:(glob)*` is not expanded.
-- Modified, newly added, and deleted files are supported.
-- Unapproved pre-staged files are refused.
-- Staged files must exactly match the approved file list before a commit is created.
-- Unsafe input or state returns structured `blocked_*` diagnostics with useful git evidence where relevant.
-
-## Controlled GitHub PR workflow
-
-`github_create_pr` is intended for the post-push review step. It creates a pull request only when the configured repo has an `origin` remote on `github.com`, the current branch is a normal local branch, the worktree is clean, and the current branch already exists on `origin` at the exact local `HEAD`.
-
-Safeguards:
-
-- PR operations use fixed `git` and `gh` argv with `shell=False`; there is no arbitrary `gh` passthrough.
-- `gh --version` and `gh auth status -h github.com` must succeed.
-- Supported public remotes are common HTTPS and SSH `github.com/OWNER/REPO` forms.
-- If `base_branch` is omitted, the bridge reads the repository default branch from `gh repo view`; it does not hard-code `main`.
-- Explicit `base_branch` values are conservatively validated and must exist on `origin`.
-- PR creation is refused from the GitHub default branch or when the current branch equals the selected base branch.
-- Unpublished branches and remote SHA mismatches are refused; C2 does not add push-upstream authority.
-- If an open PR already exists for the current branch, the existing PR evidence is returned instead of creating a duplicate.
-- New PRs are drafts by default; non-draft creation is allowed.
-
-`github_get_pr_status` includes a compact normalized `pr_readiness` section with conservative advisory PR-only evidence such as draft/open state, mergeability, review decision, checks, local branch/HEAD match, and local dirty state. `ready_to_consider_merge` is not GitHub's authoritative mergeability and is not a guarantee; missing/unknown checks, missing review decision, local branch mismatch, or local HEAD mismatch can make it false even if GitHub would allow a manual merge. It does not include target-branch sync readiness or suggested operator commands.
-
-`github_merge_pr` is a narrow execution tool for one human-approved PR merge via `gh pr merge`. It collects fresh PR evidence immediately before merging, defaults to squash merge, also supports GitHub's merge and rebase methods, always uses `--match-head-commit <fresh_head_sha>`, and may pass `--delete-branch` only when `delete_branch: true` is explicitly requested. The delete flag is gh's PR-head branch deletion behavior, not arbitrary local or remote branch cleanup. E3 is intentionally strict: it requires an open non-draft PR targeting `main`, a full PR head SHA, `APPROVED` review decision, passing checks, `MERGEABLE` / `CLEAN` mergeability, clean non-detached local state, and local branch/HEAD matching the PR head. It should normally be run from the reviewed PR head branch. It may block PRs that GitHub would allow manually, especially when `reviewDecision` is absent or unknown. It does not fetch, pull, reset, switch, locally sync, auto-merge, admin-bypass, push refs, or touch tags/releases; GitHub branch protection remains authoritative.
-
-`get_pr_sync_readiness` is a read-only follow-up for the manual PR/acceptance tail. It combines the PR readiness evidence from `github_get_pr_status` with local git evidence to report whether a PR appears ready for a human/operator to consider merging and whether a local target branch, by default `main`, appears safe to sync to `origin/<target>` using local refs only. Its combined `ready_to_consider_merge` remains conservative advisory evidence, not GitHub's authoritative mergeability or a guarantee. It does not merge, auto-merge, mutate PRs, fetch, reset, switch, pull, push, delete branches, or touch tags/releases. Suggested operator commands, when present, are advisory text only and are not executed by the bridge.
-
-`git_sync_local_branch_to_origin` is the narrow execution counterpart for the post-merge local sync tail. It uses local refs only, refuses dirty/detached/ahead/diverged state, returns `ok_noop` without switching branches when the target already equals `origin/<target>`, and only for behind-state sync after all gates pass may run fixed `git switch <target>` and `git reset --hard origin/<target>` argv. It does not fetch, pull, push, merge, mutate PRs, delete branches, or touch tags/releases.
+Optional workflow guidance is not a security boundary. Runtime safety gates on mutation tools are security-relevant and remain enforced even if you are not following the engineering-control workflow.
 
 ## Requirements
 
@@ -511,29 +463,9 @@ Smoke test only. Do not edit files.
 
 ## 14. Optional engineering-control workflow
 
-This workflow is recommended for operators who want a stricter engineering-control loop. It is not required when you only want LCB to act as a lightweight ChatGPT ↔ local Codex bridge.
+For teams or operators who want a stricter ChatGPT ↔ Codex loop, see [docs/ENGINEERING_CONTROL.md](docs/ENGINEERING_CONTROL.md). That document contains the evidence-first review posture, readiness guidance, and operating checklist that used to make this README heavier.
 
-Before starting real implementation work:
-
-```text
-1. Start local-codex-bridge serve.
-2. Start a secure HTTPS tunnel, for example ngrok http 8765.
-3. Refresh the ChatGPT connector URL if the tunnel URL changed.
-4. Select Local Codex Bridge in the chat.
-5. Run list_projects.
-6. Run get_project_status for the target project.
-7. Run git_status verification.
-8. Confirm branch, HEAD, remote, and clean worktree.
-9. Start a bounded local Codex task, preferably with `review_contract: true` for concise review-oriented output.
-10. Review stdout/stderr, `get_review_package`, targeted `get_changed_file_diff` / `get_changed_file_text` evidence as needed, and verification output.
-11. If changes are not acceptable, ask Codex to revise or stop.
-12. If changes are acceptable, explicitly approve the exact files and commit message.
-13. Call git_commit_and_push only after human approval.
-14. Confirm the returned branch, remote, commit, push output, and final status.
-15. After PR creation and review, use get_pr_sync_readiness or github_get_pr_status for conservative advisory PR merge-consideration evidence.
-16. After explicit human approval, call github_merge_pr only from the reviewed PR head branch when its strict fresh gates pass.
-17. After the PR is merged and local refs are already current, call git_sync_local_branch_to_origin only if you want the bridge to perform the narrow local sync to `origin/<target>` using local refs only.
-```
+You do not need that workflow to use LCB as a lightweight bridge. If you do use controlled mutation tools, their runtime safety gates still apply regardless of workflow style.
 
 ## 15. Common issues
 

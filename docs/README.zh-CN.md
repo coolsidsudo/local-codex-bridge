@@ -2,19 +2,25 @@
 
 [English](../README.md) | [简体中文](README.zh-CN.md)
 
-Local Codex Bridge 是一个基于项目 profile 的本地 MCP 服务器。它允许 ChatGPT 启动并检查你自己电脑上的 **本地 Codex CLI** 任务。
+Local Codex Bridge 是一个轻量的本地 MCP bridge，用于 ChatGPT ↔ Codex 工作流。它允许 ChatGPT 针对已配置的本地仓库 profile 启动和检查 **本地 Codex CLI** 任务，同时避免给 ChatGPT 宽泛的本机权限。
 
-LCB 有意分成几层：
+它适合这样的场景：你不想把云端 Codex 当作执行器，而是需要本地仓库访问、本地 git remotes，以及由操作者控制的 Codex 模型，例如本地 Codex CLI 支持的 `gpt-5.5`。
 
-- **Core bridge**：project profiles、本地 Codex task 执行、task logs、repo status、changed-file inspection，以及 allowlisted verification。
-- **Controlled actions**：可选的、由 bridge 拥有的 Git/GitHub mutation tools，例如 commit/push、PR creation、PR merge 和 post-merge local sync。因为这些工具会改变带有权限意义的状态，所以它们带有硬 safety gates。
-- **Engineering-control workflow**：可选的 review contracts、readiness evidence 和 runbook guidance，适合希望在 ChatGPT ↔ Codex 工程循环中加入更严格审查与验收纪律的 operator。
+Local Codex Bridge 是独立、通用、project-agnostic 的工具。它不假设下游项目，也不要求固定 PR workflow、review methodology 或个人工程方法论。
 
-你可以只把 LCB 当作轻量 bridge 层来使用。Engineering-control workflow 并不是每个用户或团队都必须采用；它是为希望围绕本地 Codex 工作采用保守 review / acceptance discipline 的用户提供的可选 operating mode。
+## 产品层次
 
-它适合这样的工作流：你不想使用云端 Codex 作为执行器，而是希望使用本地仓库访问、本地 git remotes，以及由操作者控制的 Codex 模型，例如本地 Codex CLI 支持的 `gpt-5.5`。
+LCB 应首先被理解为 bridge：
 
-Local Codex Bridge 是一个独立、通用的开发者 MCP bridge。它不假设任何特定下游项目；它应支持任何已配置的本地仓库 profile。
+- **Core bridge** 是默认心智模型：project profiles、本地 Codex task 执行、task logs、repo status、changed-file inspection 和 allowlisted verification。你可以只使用这一层。
+- **Controlled actions** 是可选的、由 bridge 拥有的 mutation tools，适合希望让 LCB 处理 branch creation、commit/push、PR creation、PR merge 或 post-merge local sync 的用户。这些能力是可选的；但一旦调用，runtime safety gates 就是强制的，因为它们保护真实的权限边界。
+- **Engineering-control workflow** 是更严格 ChatGPT ↔ Codex 循环的可选 guidance：review contracts、readiness checks、evidence-first review、human approval gates 和 operating checklists。轻量 bridge 用法不要求采用它。
+
+更多信息：
+
+- [Product shape](PRODUCT_SHAPE.md) — 产品边界的事实来源。
+- [Engineering-control workflow](ENGINEERING_CONTROL.md) — 可选严格 workflow guidance。
+- [Tool profiles design](TOOL_PROFILES.md) — 未来 runtime profiles 的 design-only 说明；当前尚未实现。
 
 ## 为什么需要它
 
@@ -31,21 +37,19 @@ ChatGPT -> MCP connector -> HTTPS tunnel -> Local Codex Bridge -> local Codex CL
 ```text
 Human
   -> 每个工作会话启动一次 bridge server 和安全 HTTPS tunnel
-  -> 在接受变更前审查 diff 和验证输出
+  -> 在接受 authority-changing step 前审查证据
 
 ChatGPT
   -> 通过 custom MCP connector 连接
   -> 检查项目 profile、git status、HEAD 和 remotes
   -> 启动有边界的本地 Codex 任务
-  -> 读取任务日志、diff 和验证输出
-  -> 审查结果，并在 acceptance commit/push 前请求人工批准
+  -> 读取任务日志、changed-file evidence、diff 和 verification output
 
 Local Codex Bridge
   -> 运行在操作者自己的机器上
   -> 只暴露已配置的项目 profile 和 allowlist 操作
   -> 在指定 repo 内调用本地 Codex CLI
-  -> 可以在修改前创建受控的本地工作分支
-  -> 可以对已批准文件执行受控的、人工批准的 git add/commit/push
+  -> 在显式使用时，可选执行受控 Git/GitHub actions
 
 Local Codex CLI
   -> 使用操作者本地选择的模型和配置
@@ -58,100 +62,50 @@ GitHub 或其他 VCS host
 
 ## 工具接口
 
-工具接口刻意保持保守。Core bridge tools 可以单独使用；controlled actions 和 engineering-control helpers 是给更严格 workflow 使用的可选扩展：
+当前 runtime 暴露以下工具。Runtime profiles 尚未实现；design-only 的 profile 说明见 [TOOL_PROFILES.md](TOOL_PROFILES.md)。
+
+### Core bridge tools
+
+只使用这些工具，就可以把 LCB 当作轻量 bridge：
 
 - `list_projects` — 列出已配置的项目 profiles。
 - `get_project_status` — 返回项目的 git status、HEAD 和 remotes。
-- `start_codex_task` — 在已配置项目中启动 `codex exec`。可选的 `review_contract` 会追加 bridge 自有 guidance，要求 Codex 返回简洁实现摘要，而不是完整 diff 或完整文件内容。
+- `start_codex_task` — 在已配置项目中启动 `codex exec`。可选的 `review_contract` 会追加面向审查的简洁输出 guidance。
 - `get_task` — 读取任务元数据和 stdout / stderr 尾部。
 - `list_tasks` — 列出最近的 bridge 任务记录。
 - `abort_task` — 终止正在运行的本地 Codex 进程。
-- `get_review_package` — 返回紧凑、只读的变更文件索引和 status/stat 证据，不包含完整 diff 或完整文件内容。
-- `get_changed_file_diff` — 在审查 package index 之后，返回某个 changed/staged/untracked 文件的有边界 targeted diff。
-- `get_changed_file_text` — 在 targeted diff 审查之后，返回单个 changed/staged/untracked 文件的有边界 UTF-8 文本内容。
-- `get_git_diff` — 检查 git status、unstaged/staged diffs，以及有边界的 untracked 文件预览。
 - `git_get_branch_status` — 返回当前分支、dirty 状态、HEAD、remotes、upstream 和 ahead/behind 证据。
-- `git_create_work_branch` — 基于已有本地 base 分支创建并切换到新的本地工作分支。
-- `get_acceptance_readiness` — 只读预检当前 repo 状态是否看起来可以执行人工批准的 `git_commit_and_push`。
+- `get_git_diff` — 检查 git status、unstaged/staged diffs，以及有边界的 untracked 文件预览。
+- `get_review_package` — 返回紧凑、只读的变更文件索引和 status/stat 证据，不包含完整 diff 或完整文件内容。
+- `get_changed_file_diff` — 返回单个 changed/staged/untracked 文件的有边界 targeted diff。
+- `get_changed_file_text` — 返回单个 changed/staged/untracked 文件的有边界 UTF-8 文本。
 - `run_verification` — 运行项目配置中 allowlist 的验证命令。
-- `run_verification_bundle` — 按顺序运行多个已配置的验证 key，并返回有边界的逐命令证据。
+- `run_verification_bundle` — 按顺序运行多个已配置 verification keys，并返回有边界的逐命令证据。
+
+### Optional controlled action tools
+
+这些工具会改变带有权限意义的状态。能力本身是可选的，但调用时 safety gates 不是可选的：
+
+- `git_create_work_branch` — 基于已有本地 base 分支创建并切换到新的本地工作分支。
 - `git_commit_and_push` — 在人工批准后，stage 已批准文件、创建一个 commit，并 push 到 `origin` 上的当前分支。
 - `github_create_pr` — 通过已安装的 `gh` CLI，为已经 push 的当前分支创建 GitHub pull request。
-- `github_get_pr_status` — 通过已安装的 `gh` CLI 读取 GitHub pull request 状态、证据和保守 advisory 的 PR-only readiness 证据。
 - `github_merge_pr` — 在人工批准后，通过固定 `gh pr merge` argv merge 单个 ready 的 GitHub pull request。
-- `get_pr_sync_readiness` — 只读报告把 PR readiness 与本地目标分支 sync readiness 结合后的 advisory 证据。
 - `git_sync_local_branch_to_origin` — 审查后把干净的本地目标分支同步到本地 `origin/<target>` ref；不 fetch、pull、push、merge 或修改 PR。
 
-v0 不暴露任意 shell 执行。验证命令必须在每个项目 profile 中显式 allowlist。`git_create_work_branch` 和 `git_commit_and_push` 是 bridge 自有的 Git 操作，不是通用 shell 或通用文件系统工具。
+### Optional engineering-control / readiness helpers
+
+这些工具和选项支持更严格 review loop，但不会让该 workflow 变成必需：
+
+- `start_codex_task` with `review_contract: true` — 要求 Codex 返回简洁实现摘要，而不是完整 diff 或完整文件内容。这是行为 guidance，不是安全边界。
+- `get_acceptance_readiness` — 只读预检当前 repo 状态是否看起来可以执行人工批准的 `git_commit_and_push`。
+- `github_get_pr_status` — 通过已安装的 `gh` CLI 读取 GitHub pull request 状态、证据和保守 advisory 的 PR-only readiness 证据。
+- `get_pr_sync_readiness` — 只读报告把 PR readiness 与本地目标分支 sync readiness 结合后的 advisory 证据。
+
+v0 不暴露任意 shell 执行。验证命令必须在每个项目 profile 中显式 allowlist。Bridge-owned Git/GitHub tools 使用固定 argv，并在不安全输入或状态下返回结构化 `blocked_*` diagnostics。
 
 GitHub PR 工具把 `gh` 作为外部 substrate。Local Codex Bridge 不实现原生 GitHub API / token 处理，也不存储、打印或管理 GitHub token。
 
-`start_codex_task` 的 review contract 只是行为 guidance，不是安全边界。ChatGPT 和人工 reviewer 应通过 Local Codex Bridge 工具检查真实仓库状态、验证证据和 readiness 证据，而不是信任 Codex summary、粘贴的 diff 或粘贴的文件内容。
-
-## 受控分支工作流
-
-`git_create_work_branch` 用于在 Codex 开始修改前，把干净的已配置 repo 移到安全的 feature / work 分支。它的安全措施包括：
-
-- 只接受本地分支名，不把 `main` 硬编码为通用 base。
-- 如果省略 `base_branch`，使用当前 checkout 的分支。
-- `base_branch` 必须是已存在的本地分支；拒绝 `origin/main` 这类 remote-style base、`refs/heads/main` 这类完整 ref，以及 `HEAD`。
-- 目标分支不能已经存在；切换已有分支暂不支持。
-- worktree 必须按 `git status --porcelain=v1 --untracked-files=normal` 判断为干净。
-- 拒绝 detached HEAD。
-- 分支名必须通过 Local Codex Bridge 的保守校验和 `git check-ref-format --branch`。
-- 它会在本地创建并 checkout 新分支，但不会 push、merge、删除分支、创建 PR，或触碰 tags。
-
-## 受控 acceptance 流程
-
-预期的 acceptance 工作流是：
-
-```text
-ChatGPT 规划 / 审查
-  -> 本地 Codex CLI 修改已配置 repo
-  -> ChatGPT 审查 package index、targeted diffs 和验证输出
-  -> ChatGPT 对已批准文件集合做只读 acceptance readiness 预检
-  -> 人工接受
-  -> Local Codex Bridge 执行受控 git add/commit/push
-```
-
-只有在人工已经审查来自 `get_git_diff` 和 `run_verification` 或 `run_verification_bundle` 的精确 diff 和验证证据后，才应调用 `git_commit_and_push`。`get_acceptance_readiness` 是针对已批准文件集合的只读预检：它报告当前 branch/HEAD/remotes、staged/unstaged/untracked 文件、approved-file 覆盖情况、可用的 origin/upstream 证据，以及 `git_commit_and_push` 是否可能被阻止。它不会 stage、commit、push、fetch、修改分支、创建 PR，或触碰 tags/releases。`run_verification_bundle` 只接受已配置的验证 key，按顺序运行其固定 allowlist argv 数组并使用 `shell=False`，返回有边界的逐命令 stdout/stderr 证据；bundle 编排本身不会增加 Git/GitHub/PR/tag/release 修改权限，但实际副作用取决于被配置的 allowlist 命令，因此如果 operator 想要只读验证语义，应把验证 key 配置为只读命令。作为第一步审查索引，`get_review_package` 会返回 branch/HEAD/remotes、status/stat 证据、变更文件分类和有边界的 untracked 预览元数据，但不返回完整 diff 或完整文件内容。`get_changed_file_diff` 是只读 follow-up，用于单个 changed/staged/untracked 路径；它使用 targeted fixed git commands，拒绝 unsafe path 和 binary content，并限制输出大小。`get_changed_file_text` 是进一步的只读 follow-up，用于单个当前 changed/staged/untracked 文件的有边界 UTF-8 内容；它会拒绝 unchanged path、deleted/no-content path、binary/invalid UTF-8、unsafe path、目录、symlink 和非普通文件。`get_git_diff` 会区分 unstaged 和 staged 变更，并在安全时包含有边界的 untracked 文本预览。它的安全措施包括：
-
-- 只能访问已配置项目根目录。
-- 不暴露任意 shell 执行。
-- 验证命令仍按项目 profile allowlist。
-- remote 当前只支持 `origin`。
-- 如果省略 `branch`，bridge 使用当前 checkout 的分支。
-- 如果显式提供 `branch`，它必须匹配当前 checkout 的分支。
-- 已批准文件路径会规范化为 repo-relative 路径，并且必须留在已配置项目根目录内。
-- Git staging 使用 literal pathspec 处理，因此 `:(glob)*` 这类 pathspec magic 不会被展开。
-- 支持 modified、新增和删除的文件。
-- 拒绝未批准的预先 staged 文件。
-- 创建 commit 前，staged 文件必须与已批准文件列表完全一致。
-- 不安全输入或状态会返回结构化 `blocked_*` diagnostics，并在相关时包含有用的 git 证据。
-
-## 受控 GitHub PR 工作流
-
-`github_create_pr` 用于 push 之后的审查步骤。只有当已配置 repo 的 `origin` remote 位于 `github.com`、当前分支是普通本地分支、worktree 干净，并且当前分支已经在 `origin` 上且 SHA 与本地 `HEAD` 完全一致时，它才会创建 pull request。
-
-安全措施包括：
-
-- PR 操作只使用固定的 `git` 和 `gh` argv，并使用 `shell=False`；不提供任意 `gh` 透传。
-- `gh --version` 和 `gh auth status -h github.com` 必须成功。
-- 支持常见公开 GitHub HTTPS 和 SSH `github.com/OWNER/REPO` remote 形式。
-- 如果省略 `base_branch`，bridge 通过 `gh repo view` 读取仓库默认分支；不会硬编码 `main`。
-- 显式 `base_branch` 会经过保守校验，并且必须存在于 `origin`。
-- 如果当前分支是 GitHub 默认分支，或当前分支等于选定 base 分支，则拒绝创建 PR。
-- 未发布分支和 remote SHA 不匹配会被拒绝；C2 不增加 push-upstream 权限。
-- 如果当前分支已有 open PR，则返回已有 PR 证据，不创建重复 PR。
-- 新 PR 默认是 draft；允许创建非 draft PR。
-
-`github_get_pr_status` 包含紧凑的规范化 `pr_readiness` 区块，提供保守 advisory 的 PR-only 证据，例如 draft/open 状态、mergeability、review decision、checks、本地 branch/HEAD 是否匹配，以及本地 dirty 状态。`ready_to_consider_merge` 不是 GitHub 的权威 mergeability，也不是保证；checks missing/unknown、缺少 review decision、本地分支不匹配或本地 HEAD 不匹配，都可能让 readiness 为 false，即使 GitHub 允许人工 merge。它不包含目标分支 sync readiness，也不返回建议 operator commands。
-
-`github_merge_pr` 是一个窄执行工具，用于通过 `gh pr merge` merge 单个已经人工批准的 PR。它会在 merge 前立即收集新的 PR 证据，默认使用 squash merge，也支持 GitHub 的 merge 和 rebase 方式，始终使用 `--match-head-commit <fresh_head_sha>`；只有在显式设置 `delete_branch: true` 时才会传入 `--delete-branch`。这个删除标志只表示 gh 的 PR head branch 删除行为，不是任意本地或远端分支清理。E3 故意严格：它要求 PR open、非 draft、目标为 `main`、有完整 PR head SHA、review decision 为 `APPROVED`、checks 通过、mergeability 为 `MERGEABLE` / `CLEAN`、本地状态 clean 且非 detached，并且本地 branch/HEAD 匹配 PR head。通常应在已经审查过的 PR head branch 上运行。它可能会阻止 GitHub 手动界面允许 merge 的 PR，尤其是在 `reviewDecision` 缺失或未知时。它不会 fetch、pull、reset、switch、本地 sync、auto-merge、admin-bypass、push refs，或触碰 tags/releases；GitHub branch protection 仍然是权威。
-
-`get_pr_sync_readiness` 是人工 PR / acceptance 尾部流程的只读 follow-up。它把 `github_get_pr_status` 的 PR readiness 证据和本地 git 证据合并，报告 PR 是否看起来可供人工/operator 考虑 merge，以及本地目标分支（默认 `main`）是否基于本地 refs 看起来可以同步到 `origin/<target>`。其合并后的 `ready_to_consider_merge` 仍是保守 advisory 证据，不是 GitHub 的权威 mergeability，也不是保证。它不会 merge、auto-merge、修改 PR、fetch、reset、switch、pull、push、删除分支，或触碰 tags/releases。返回的 operator commands（如果有）只是建议文本，bridge 不会执行它们。
-
-`git_sync_local_branch_to_origin` 是 post-merge 本地 sync 尾部流程的窄执行工具。它只使用本地 refs，拒绝 dirty、detached、ahead 或 diverged 状态；当目标分支已经等于 `origin/<target>` 时返回 `ok_noop` 且不切换分支；只有在所有 gate 通过后的 behind 状态下，才可以运行固定 argv：`git switch <target>` 和 `git reset --hard origin/<target>`。它不会 fetch、pull、push、merge、修改 PR、删除分支，或触碰 tags/releases。
+可选 workflow guidance 不是安全边界。Mutation tools 的 runtime safety gates 与安全相关；即使你没有采用 engineering-control workflow，它们仍会被执行。
 
 ## 环境要求
 
@@ -509,29 +463,9 @@ Smoke test only. Do not edit files.
 
 ## 14. Optional engineering-control workflow
 
-这个 workflow 推荐给希望采用更严格 engineering-control loop 的 operator。只想把 LCB 当作轻量 ChatGPT ↔ local Codex bridge 时，并不要求采用这一套流程。
+如果团队或 operator 希望采用更严格的 ChatGPT ↔ Codex loop，请参见 [ENGINEERING_CONTROL.md](ENGINEERING_CONTROL.md)。该文档包含 evidence-first review posture、readiness guidance 和 operating checklist；这些内容不再让 README 显得过重。
 
-开始真正实现任务之前：
-
-```text
-1. 启动 local-codex-bridge serve。
-2. 启动安全 HTTPS tunnel，例如 ngrok http 8765。
-3. 如果 tunnel URL 改变，刷新 ChatGPT connector URL。
-4. 在聊天中选择 Local Codex Bridge。
-5. 运行 list_projects。
-6. 对目标项目运行 get_project_status。
-7. 运行 git_status verification。
-8. 确认 branch、HEAD、remote 和 clean worktree。
-9. 启动有边界的本地 Codex task；建议使用 `review_contract: true` 获取简洁、面向审查的输出。
-10. 审查 stdout/stderr、`get_review_package`、按需查看 targeted `get_changed_file_diff` / `get_changed_file_text` 证据，以及 verification output。
-11. 如果变更不可接受，请让 Codex 修改或停止。
-12. 如果变更可接受，明确批准精确文件列表和 commit message。
-13. 只有在人工批准后才调用 git_commit_and_push。
-14. 确认返回的 branch、remote、commit、push output 和 final status。
-15. PR 创建并审查后，使用 get_pr_sync_readiness 或 github_get_pr_status 获取保守 advisory 的 PR merge-consideration 证据。
-16. 明确人工批准后，只有在严格 fresh gate 通过且位于已审查 PR head branch 时，才调用 github_merge_pr。
-17. PR 已 merge 且本地 refs 已经是最新之后，只有在希望 bridge 执行基于本地 refs 的窄本地同步时，才调用 git_sync_local_branch_to_origin。
-```
+你不需要采用这套 workflow 才能把 LCB 当作轻量 bridge 使用。如果你使用 controlled mutation tools，它们的 runtime safety gates 仍会执行，与 workflow 风格无关。
 
 ## 15. 常见问题
 

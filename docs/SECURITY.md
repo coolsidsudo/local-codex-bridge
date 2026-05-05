@@ -23,6 +23,13 @@ Local Codex Bridge is project-agnostic: configured project roots are trust bound
 - Do not publish temporary tunnel URLs in public issues or documentation.
 
 
+
+## Workflow guidance versus runtime gates
+
+Optional engineering-control guidance is not a security boundary. Review contracts, readiness-first checklists, and `review_pending` posture help operators review carefully, but they are workflow recommendations.
+
+Runtime safety gates on mutation tools are security-relevant. If a controlled action such as `git_commit_and_push`, `github_merge_pr`, or `git_sync_local_branch_to_origin` is enabled and called, its preflight checks, fixed argv, refusal behavior, and partial-failure evidence remain mandatory regardless of the operator's workflow style.
+
 ## Built-in auth
 
 LCB auth configuration is first-class:
