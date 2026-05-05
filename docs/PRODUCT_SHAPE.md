@@ -1,10 +1,10 @@
 # Product shape: core bridge and optional engineering control
 
-Local Codex Bridge has two related jobs that should stay clearly separated.
+Local Codex Bridge should read as a lightweight local MCP bridge first.
 
-The first job is the core bridge: give ChatGPT a narrow MCP surface for working with a configured local repository through local Codex and local repo evidence. This core should stay lightweight, project-agnostic, and useful even when the operator wants only task execution, inspection, and verification.
+Its product model has three layers that should stay clearly separated: core bridge, optional controlled actions, and optional engineering-control workflow. The core bridge is the default mental model. Controlled actions are optional product capabilities with mandatory runtime gates when used. Engineering-control workflow is optional guidance, not universal doctrine.
 
-The second job is optional engineering control: provide conservative review, readiness, and controlled Git/GitHub workflow tools for operators who want ChatGPT and local Codex to participate in a stricter engineering loop. These controls are useful for high-trust local development workflows, but they are not required for every LCB user and should not be treated as universal engineering doctrine.
+This separation lets LCB remain useful for people who only want ChatGPT to start local Codex tasks and inspect bounded local repo evidence, while still supporting operators who want a stricter, evidence-first engineering loop.
 
 ## Layers
 
@@ -54,6 +54,13 @@ Is this a recommended way to review or organize work?
 Is this only useful for one downstream project or one operator's habits?
   -> keep it out of core LCB, or present it as an example/profile.
 ```
+
+
+## Related docs
+
+- [README](../README.md) is the core-first user entry point.
+- [ENGINEERING_CONTROL.md](ENGINEERING_CONTROL.md) contains optional strict workflow guidance and checklists.
+- [TOOL_PROFILES.md](TOOL_PROFILES.md) records design-only notes for possible future runtime profiles; profiles are not implemented yet.
 
 ## Product identity
 
