@@ -136,18 +136,18 @@ For a pinned release install, use the GitHub tag. This is the recommended user i
 With `pipx`:
 
 ```bash
-pipx install "git+https://github.com/coolsidsudo/local-codex-bridge.git@v0.2.0"
+pipx install "git+https://github.com/coolsidsudo/local-codex-bridge.git@v0.3.0"
 local-codex-bridge --help
 ```
 
 With `uv`:
 
 ```bash
-uv tool install "git+https://github.com/coolsidsudo/local-codex-bridge.git@v0.2.0"
+uv tool install "git+https://github.com/coolsidsudo/local-codex-bridge.git@v0.3.0"
 local-codex-bridge --help
 ```
 
-Tag installs do not automatically create `~/.local-codex-bridge/config.toml`. Versions `v0.2.0` and later include `local-codex-bridge init`, which is the recommended setup path. If your installed version does not have `init`, use the manual `config.example.toml` fallback below.
+Tag installs do not automatically create `~/.local-codex-bridge/config.toml`. Current tagged installs include `local-codex-bridge init`, which is the recommended setup path. If your installed version does not have `init`, use the manual `config.example.toml` fallback below.
 
 For contributor/development work, use a clone and editable install:
 
