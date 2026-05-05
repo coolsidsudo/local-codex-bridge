@@ -20,6 +20,7 @@ LCB 应首先被理解为 bridge：
 
 - [Product shape](PRODUCT_SHAPE.md) — 产品边界的事实来源。
 - [Engineering-control workflow](ENGINEERING_CONTROL.md) — 可选严格 workflow guidance。
+- [Full controlled-loop smoke runbook](FULL_LOOP_SMOKE.md) — 完整 controlled loop 的可选 maintainer release-smoke 指南。
 - [Tool profiles design](TOOL_PROFILES.md) — 未来 runtime profiles 的 design-only 说明；当前尚未实现。
 
 ## 为什么需要它
@@ -49,7 +50,7 @@ Local Codex Bridge
   -> 运行在操作者自己的机器上
   -> 只暴露已配置的项目 profile 和 allowlist 操作
   -> 在指定 repo 内调用本地 Codex CLI
-  -> 在显式使用时，可选执行受控 Git/GitHub actions
+  -> 在显式使用时，可选执行受控 branch、commit/push、PR、merge 和 local sync actions
 
 Local Codex CLI
   -> 使用操作者本地选择的模型和配置
@@ -497,7 +498,7 @@ Smoke test only. Do not edit files.
 
 ## 16. 安全说明
 
-这个 bridge 可以让本地 Codex 修改已配置仓库中的文件，并且在明确人工批准后可以执行受控 acceptance commit/push。请把它当作强大的本地自动化工具。
+这个 bridge 可以让本地 Codex 修改已配置仓库中的文件。明确使用可选 controlled action tools 时，它还可以创建本地工作分支、commit 并 push 已批准文件、创建 GitHub PR、merge 已批准 PR，以及把本地目标分支同步到 `origin/<target>`。请把它当作强大的本地自动化工具。
 
 建议默认做法：
 
@@ -506,6 +507,7 @@ Smoke test only. Do not edit files.
 - 只配置你愿意让 ChatGPT / Codex 操作的 repo。
 - 验证命令必须 allowlist。
 - 在接受变更前审查 staged/unstaged diffs、有边界的 untracked 预览和 verification output。
+- 只有在人工明确批准具体 operation、files、message、PR、merge method 或 sync target 后，才使用 mutation tools。
 - 只对已审查和已批准文件使用 `git_commit_and_push`。
 - 不要在 prompt 中传递 secrets。
 - 不要在公开 issue 或 docs 中发布临时 tunnel URL、auth 环境变量或 bearer token。

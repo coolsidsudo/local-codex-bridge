@@ -1,6 +1,6 @@
 # Security notes
 
-This bridge can start local Codex against configured local repositories. That means it can indirectly modify files in any configured project. It can also create a controlled local work branch and perform a controlled Git acceptance commit/push after explicit human approval. Configure it conservatively.
+This bridge can start local Codex against configured local repositories. That means it can indirectly modify files in any configured project. When optional controlled action tools are explicitly used, it can also create local work branches, commit and push approved files, create GitHub PRs, merge approved PRs, and sync a local target branch to `origin/<target>`. Configure it conservatively.
 
 Local Codex Bridge is project-agnostic: configured project roots are trust boundaries, and bridge behavior should not assume a particular downstream repository.
 
@@ -19,6 +19,8 @@ Local Codex Bridge is project-agnostic: configured project roots are trust bound
 - Use `get_acceptance_readiness` as a read-only preflight before the human-approved commit/push step.
 - Use `git_commit_and_push` only after explicit human approval of the exact files and commit message.
 - Use `github_create_pr` only after the current branch has already been intentionally pushed to `origin`.
+- Use `github_merge_pr` only after explicit human approval of the PR reference, merge method, expected head SHA, and branch deletion choice.
+- Use `git_sync_local_branch_to_origin` only after explicit human approval of the target branch and local-ref-only sync evidence.
 - Keep secrets out of task prompts and logs.
 - Do not publish temporary tunnel URLs in public issues or documentation.
 
@@ -28,7 +30,7 @@ Local Codex Bridge is project-agnostic: configured project roots are trust bound
 
 Optional engineering-control guidance is not a security boundary. Review contracts, readiness-first checklists, and `review_pending` posture help operators review carefully, but they are workflow recommendations.
 
-Runtime safety gates on mutation tools are security-relevant. If a controlled action such as `git_commit_and_push`, `github_merge_pr`, or `git_sync_local_branch_to_origin` is enabled and called, its preflight checks, fixed argv, refusal behavior, and partial-failure evidence remain mandatory regardless of the operator's workflow style.
+Runtime safety gates on mutation tools are security-relevant. If a controlled action such as `git_create_work_branch`, `git_commit_and_push`, `github_create_pr`, `github_merge_pr`, or `git_sync_local_branch_to_origin` is enabled and called, its preflight checks, fixed argv, refusal behavior, and partial-failure evidence remain mandatory regardless of the operator's workflow style.
 
 ## Built-in auth
 
@@ -127,7 +129,7 @@ Safeguards:
 - PR creation is refused from the GitHub default branch and when the current branch equals the selected base branch.
 - Existing open PRs for the current branch are returned as evidence instead of creating duplicates.
 - Draft PRs are the default. Non-draft creation is allowed. Merge execution is separate and remains blocked for draft PRs, missing or non-approved review decisions, non-passing checks, unclean mergeability evidence, or stale local evidence.
-- Auto-merge, admin bypass, generic `gh` passthrough, local sync, fetch/pull/reset/switch, arbitrary branch deletion, and release/tag operations are not exposed by PR tools.
+- Auto-merge, admin bypass, generic `gh` passthrough, local sync, fetch/pull/reset/switch, arbitrary branch deletion, and release/tag operations are not exposed by PR tools. Local sync is a separate controlled Git tool with its own strict gates.
 
 ## Tunnels and platform gating
 
@@ -145,3 +147,4 @@ ChatGPT-side developer MCP errors such as `FORBIDDEN: This conversation does not
 - Branch creation is local-only and refuses dirty or detached state.
 - Remote selection for `git_commit_and_push` is currently constrained to `origin`.
 - GitHub PR create/status/merge requires `gh` and supports public `github.com` remotes only; no push-upstream tool is included.
+- Runtime tool profiles are design-only and not implemented; all currently registered tools remain exposed by the current runtime.

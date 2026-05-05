@@ -4,6 +4,8 @@
 
 ### Added
 
+- `git_get_branch_status` MCP tool for current branch, dirty state, HEAD, remotes, upstream, and ahead/behind evidence.
+- `git_create_work_branch` MCP tool for narrow local work-branch creation with clean-worktree and branch-name safety gates.
 - `get_review_package` MCP tool for a compact read-only changed-file review index without full diffs or full file contents.
 - `get_changed_file_diff` MCP tool for one bounded targeted changed-file diff with staged, unstaged, untracked, and auto source modes.
 - `get_changed_file_text` MCP tool for bounded UTF-8 text from one currently changed/staged/untracked file.
@@ -11,6 +13,8 @@
 - `get_acceptance_readiness` MCP tool for read-only preflight evidence before a human-approved `git_commit_and_push`.
 - `get_pr_sync_readiness` MCP tool for conservative advisory PR merge-consideration and local target-branch sync readiness evidence.
 - `git_sync_local_branch_to_origin` MCP tool for narrow post-merge local target-branch sync to local `origin/<target>` refs.
+- `github_create_pr` MCP tool for controlled GitHub PR creation through fixed `gh pr create` argv for already-pushed branches.
+- `github_get_pr_status` MCP tool for GitHub PR status/evidence through fixed `gh` argv.
 - `github_merge_pr` MCP tool for narrow human-approved GitHub PR merge execution through fixed `gh pr merge` argv with conservative fresh readiness gates.
 - Optional `start_codex_task` review contract guidance for concise Codex implementation summaries.
 - Normalized conservative advisory PR-only readiness evidence in `github_get_pr_status`.
@@ -18,6 +22,7 @@
 ### Changed
 
 - README/docs restructuring around core bridge versus optional engineering control, keeping LCB framed as a lightweight bridge first.
+- Expanded release-readiness docs, security wording, and full controlled-loop smoke guidance.
 - Added optional engineering-control workflow guidance and design-only tool profile documentation.
 
 ## [0.2.0] - 2026-05-02
