@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-05-05
+
 ### Added
 
 - `git_get_branch_status` MCP tool for current branch, dirty state, HEAD, remotes, upstream, and ahead/behind evidence.
