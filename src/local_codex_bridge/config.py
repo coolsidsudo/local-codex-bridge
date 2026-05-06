@@ -88,6 +88,7 @@ class AuthConfig(BaseModel):
     required_scopes: list[str] = Field(default_factory=lambda: ["lcb:read"])
     token_scopes: list[str] = Field(default_factory=lambda: ["lcb:read", "lcb:write"])
     provider_config_url: str | None = None
+    oidc_scopes: list[str] = Field(default_factory=lambda: ["openid"])
     client_id_env: str = "LCB_OIDC_CLIENT_ID"
     client_secret_env: str = "LCB_OIDC_CLIENT_SECRET"
 
@@ -116,7 +117,7 @@ class AuthConfig(BaseModel):
             raise ValueError("provider_config_url must not include username or password")
         return url
 
-    @field_validator("required_scopes", "token_scopes")
+    @field_validator("required_scopes", "token_scopes", "oidc_scopes")
     @classmethod
     def normalize_scopes(cls, value: list[str]) -> list[str]:
         normalized = [scope.strip() for scope in value]

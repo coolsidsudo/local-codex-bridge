@@ -53,6 +53,7 @@ def build_auth_provider(config: BridgeConfig) -> StaticTokenVerifier | OIDCProxy
             client_id=client_id,
             client_secret=client_secret,
             base_url=config.server.public_base_url,
+            required_scopes=auth.oidc_scopes,
         )
 
     raise ValueError(f"Unsupported auth mode: {auth.mode}")

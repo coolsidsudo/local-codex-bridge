@@ -124,7 +124,7 @@ Tunnels are external deployment layers. They are not Python runtime dependencies
 
 Local Codex Bridge has first-class auth configuration and fails closed for public-style no-auth deployments. The default `auth.mode = "auto"` permits no-auth only for loopback local development with no `server.public_base_url`. Explicit `auth.mode = "disabled"` is also loopback-only.
 
-The recommended public ChatGPT-compatible mode is `auth.mode = "oidc_proxy"`, using FastMCP built-in OIDC proxy auth. Set `server.public_base_url` to your real public HTTPS tunnel/domain without `/mcp`, then use `{public_base_url}/mcp` as the ChatGPT connector URL and `{public_base_url}/auth/callback` as the IdP redirect URI. OIDC client ID and client secret must come from environment variables. `example.com` and `YOUR-...` values in docs are placeholders and do not exist.
+The recommended public ChatGPT-compatible mode is `auth.mode = "oidc_proxy"`, using FastMCP built-in OIDC proxy auth. Set `server.public_base_url` to your real public HTTPS tunnel/domain without `/mcp`, then use `{public_base_url}/mcp` as the ChatGPT connector URL and `{public_base_url}/auth/callback` as the IdP redirect URI. OIDC scopes are non-secret config and default narrowly to `["openid"]`; add `email` and/or `profile` only if your provider policy requires those claim scopes. OIDC client ID and client secret must come from environment variables. `example.com` and `YOUR-...` values in docs are placeholders and do not exist.
 
 `auth.mode = "static_bearer"` is also available via a token stored in an environment variable such as `LCB_AUTH_TOKEN`. This is for local/internal/test clients that can send `Authorization: Bearer ...`; it is not the recommended public ChatGPT custom MCP path. Do not use query-string tokens. Cloudflare Tunnel and ngrok are transport only; LCB auth is the security boundary. See [docs/AUTH.md](docs/AUTH.md).
 
@@ -262,7 +262,7 @@ Before starting the server, run:
 local-codex-bridge doctor --config ~/.local-codex-bridge/config.toml
 ```
 
-`doctor` validates the config without starting MCP, running Codex, or contacting your identity provider. For `auth.mode = "oidc_proxy"`, it prints the ChatGPT connector URL, IdP redirect URI, provider config URL, and whether the configured OIDC credential environment variables are set. It prints environment variable names only, never bearer tokens, OIDC client IDs, or OIDC client secrets.
+`doctor` validates the config without starting MCP, running Codex, or contacting your identity provider. For `auth.mode = "oidc_proxy"`, it prints the ChatGPT connector URL, IdP redirect URI, provider config URL, configured OIDC scope names, and whether the configured OIDC credential environment variables are set. It prints environment variable names and non-secret scope names only, never bearer tokens, OIDC client IDs, or OIDC client secrets.
 
 ## 5. Run the bridge locally
 
@@ -373,6 +373,7 @@ For `auth.mode = "oidc_proxy"`:
 - `server.public_base_url`: your real HTTPS tunnel/domain, without `/mcp`.
 - ChatGPT connector URL: `{public_base_url}/mcp`.
 - IdP redirect URI: `{public_base_url}/auth/callback`.
+- `oidc_scopes`: non-secret OIDC scopes; defaults to `["openid"]`. Add `email` and/or `profile` only if your provider policy requires those claim scopes.
 - Env vars: OIDC client ID and client secret.
 
 `example.com` domains and `YOUR-...` values are placeholders. They do not exist; replace them with your real values.

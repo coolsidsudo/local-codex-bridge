@@ -68,6 +68,7 @@ path = "{project_dir}"
 def oidc_auth_block(
     *,
     provider_config_url: str | None = "https://idp.example.test/.well-known/openid-configuration",
+    oidc_scopes: list[str] | None = None,
     client_id_env: str = "LCB_OIDC_CLIENT_ID",
     client_secret_env: str = "LCB_OIDC_CLIENT_SECRET",
 ) -> str:
@@ -76,10 +77,18 @@ def oidc_auth_block(
         if provider_config_url is not None
         else ""
     )
+    oidc_scopes_line = (
+        "oidc_scopes = ["
+        + ", ".join(f'"{scope}"' for scope in oidc_scopes)
+        + "]\n"
+        if oidc_scopes is not None
+        else ""
+    )
     return (
         '[auth]\n'
         'mode = "oidc_proxy"\n'
         f'{provider_line}'
+        f'{oidc_scopes_line}'
         f'client_id_env = "{client_id_env}"\n'
         f'client_secret_env = "{client_secret_env}"\n'
     )
@@ -148,6 +157,10 @@ def test_unknown_auth_field_fails_validation(tmp_path: Path) -> None:
     assert SECRET_TOKEN not in message
 
 
+def test_default_oidc_scopes_are_openid_only() -> None:
+    assert AuthConfig().oidc_scopes == ["openid"]
+
+
 def test_blank_required_scopes_entry_fails() -> None:
     with pytest.raises(ValueError) as exc_info:
         AuthConfig(required_scopes=["lcb:read", "  "])
@@ -169,11 +182,47 @@ def test_blank_token_scopes_entry_fails() -> None:
     assert "blank scope" in str(exc_info.value)
 
 
+def test_empty_oidc_scopes_fails() -> None:
+    with pytest.raises(ValueError) as exc_info:
+        AuthConfig(oidc_scopes=[])
+
+    assert "must not be empty" in str(exc_info.value)
+
+
+def test_blank_oidc_scopes_entry_fails() -> None:
+    with pytest.raises(ValueError) as exc_info:
+        AuthConfig(oidc_scopes=["openid", "\t"])
+
+    assert "blank scope" in str(exc_info.value)
+
+
 def test_scope_strings_are_stripped() -> None:
-    auth = AuthConfig(required_scopes=[" lcb:read "], token_scopes=[" lcb:write "])
+    auth = AuthConfig(
+        required_scopes=[" lcb:read "],
+        token_scopes=[" lcb:write "],
+        oidc_scopes=[" openid ", " email "],
+    )
 
     assert auth.required_scopes == ["lcb:read"]
     assert auth.token_scopes == ["lcb:write"]
+    assert auth.oidc_scopes == ["openid", "email"]
+
+
+def test_oidc_toml_configured_scopes_are_stripped(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    set_oidc_env(monkeypatch)
+
+    cfg = BridgeConfig.load(
+        write_config(
+            tmp_path,
+            public_base_url="https://lcb.example.test",
+            auth_block=oidc_auth_block(oidc_scopes=[" openid ", " email ", " profile "]),
+        )
+    )
+
+    assert cfg.auth.oidc_scopes == ["openid", "email", "profile"]
 
 
 
@@ -354,7 +403,7 @@ def test_oidc_credential_literal_in_toml_fails_without_leaking_value(
     assert literal_value not in message
 
 
-def test_oidc_provider_construction_uses_minimal_fastmcp_args(
+def test_oidc_provider_construction_passes_default_scopes_to_fastmcp(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -383,11 +432,37 @@ def test_oidc_provider_construction_uses_minimal_fastmcp_args(
         "client_id": OIDC_CLIENT_ID,
         "client_secret": OIDC_CLIENT_SECRET,
         "base_url": "https://lcb.example.test",
+        "required_scopes": ["openid"],
     }
     assert "redirect_path" not in captured
-    assert "required_scopes" not in captured
     assert "upstream_authorization_endpoint" not in captured
     assert "upstream_token_endpoint" not in captured
+
+
+def test_oidc_provider_construction_passes_configured_scopes_to_fastmcp(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    set_oidc_env(monkeypatch)
+    captured: dict[str, object] = {}
+
+    class DummyOIDCProxy:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+    monkeypatch.setattr("local_codex_bridge.auth.OIDCProxy", DummyOIDCProxy)
+    cfg = BridgeConfig.load(
+        write_config(
+            tmp_path,
+            public_base_url="https://lcb.example.test",
+            auth_block=oidc_auth_block(oidc_scopes=["openid", "email", "profile"]),
+        )
+    )
+
+    provider = build_auth_provider(cfg)
+
+    assert isinstance(provider, DummyOIDCProxy)
+    assert captured["required_scopes"] == ["openid", "email", "profile"]
 
 
 def test_oidc_startup_output_does_not_include_env_credentials(
