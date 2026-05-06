@@ -53,7 +53,7 @@ Do not put OIDC client IDs or client secrets directly in TOML. LCB intentionally
 
 `server.public_base_url` is a public HTTPS origin/base only. It must start with `https://`, must not include `/mcp`, must not include a non-root path, query string, or fragment, and is normalized by removing a trailing `/`.
 
-FastMCP's OIDC proxy publishes the OAuth/OIDC support endpoints and uses `/auth/callback` by default. Local Codex Bridge passes `oidc_scopes` to FastMCP as required OIDC scopes so the authorization request includes `openid` by default. Local Codex Bridge does not implement a native OAuth server.
+FastMCP's OIDC proxy publishes the OAuth/OIDC support endpoints and uses `/auth/callback` by default. Local Codex Bridge passes `oidc_scopes` to FastMCP as required OIDC scopes so the authorization request includes `openid` by default. Local Codex Bridge also exposes `/.well-known/openid-configuration` in `oidc_proxy` mode as a compatibility discovery alias for clients that probe OpenID Discovery. This alias points at the existing OAuth proxy endpoints and intentionally omits `jwks_uri`; Local Codex Bridge does not expose a public JWKS document and does not implement a native OAuth/OIDC server.
 
 ### Check your setup
 
