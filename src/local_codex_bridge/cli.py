@@ -112,6 +112,7 @@ def doctor(
         print(f"[cyan]ChatGPT connector URL:[/cyan] {public_base_url}/mcp")
         print(f"[cyan]IdP redirect URI:[/cyan] {public_base_url}/auth/callback")
         print(f"[cyan]Provider config URL:[/cyan] {auth.provider_config_url}")
+        print(f"[cyan]OIDC scopes:[/cyan] {' '.join(auth.oidc_scopes)}")
         ok = _print_env_status("OIDC client ID env var", auth.client_id_env) and ok
         ok = _print_env_status("OIDC client secret env var", auth.client_secret_env) and ok
         if _contains_placeholder(

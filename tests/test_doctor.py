@@ -56,11 +56,20 @@ path = "{project_dir}"
 def oidc_auth_block(
     *,
     provider_config_url: str = "https://idp.example.test/.well-known/openid-configuration",
+    oidc_scopes: list[str] | None = None,
 ) -> str:
+    oidc_scopes_line = (
+        "oidc_scopes = ["
+        + ", ".join(f'"{scope}"' for scope in oidc_scopes)
+        + "]\n"
+        if oidc_scopes is not None
+        else ""
+    )
     return (
         '[auth]\n'
         'mode = "oidc_proxy"\n'
         f'provider_config_url = "{provider_config_url}"\n'
+        f'{oidc_scopes_line}'
         'client_id_env = "LCB_OIDC_CLIENT_ID"\n'
         'client_secret_env = "LCB_OIDC_CLIENT_SECRET"\n'
     )
@@ -100,12 +109,35 @@ def test_oidc_doctor_prints_setup_values_without_secrets_or_oidc_proxy(
     assert "https://lcb.example.test/mcp" in result.output
     assert "https://lcb.example.test/auth/callback" in result.output
     assert "https://idp.example.test/.well-known/openid-configuration" in result.output
+    assert "OIDC scopes:" in result.output
+    assert "openid" in result.output
     assert "LCB_OIDC_CLIENT_ID" in result.output
     assert "LCB_OIDC_CLIENT_SECRET" in result.output
     assert "(set)" in result.output
     assert OIDC_CLIENT_ID not in result.output
     assert OIDC_CLIENT_SECRET not in result.output
     assert constructed is False
+
+
+def test_oidc_doctor_prints_configured_scope_names_without_secrets(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("LCB_OIDC_CLIENT_ID", OIDC_CLIENT_ID)
+    monkeypatch.setenv("LCB_OIDC_CLIENT_SECRET", OIDC_CLIENT_SECRET)
+    cfg_file = write_config(
+        tmp_path,
+        public_base_url="https://lcb.example.test",
+        auth_block=oidc_auth_block(oidc_scopes=["openid", "email", "profile"]),
+    )
+
+    result = run_doctor(cfg_file)
+
+    assert result.exit_code == 0
+    assert "OIDC scopes:" in result.output
+    assert "openid email profile" in result.output
+    assert OIDC_CLIENT_ID not in result.output
+    assert OIDC_CLIENT_SECRET not in result.output
 
 
 def test_oidc_doctor_missing_env_vars_exits_one_without_weakening_strict_load(

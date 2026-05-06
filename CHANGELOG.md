@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Added configurable OIDC scopes for `auth.mode = "oidc_proxy"`, defaulting narrowly to `["openid"]`, and passed them to FastMCP `OIDCProxy` as `required_scopes` so OAuth/OIDC metadata and upstream authorization requests include the required OpenID scope.
+- `doctor` and init-generated OIDC config now show/write non-secret OIDC scope names while continuing to keep OIDC credential values environment-only.
+
 ## [0.3.0] - 2026-05-05
 
 ### Added

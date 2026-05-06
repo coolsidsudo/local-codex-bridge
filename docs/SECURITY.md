@@ -41,7 +41,7 @@ LCB auth configuration is first-class:
 - `auth.mode = "static_bearer"` uses FastMCP's static bearer verifier with the token read from an environment variable such as `LCB_AUTH_TOKEN`. It is for local/internal/test clients only, not recommended public ChatGPT use.
 - `auth.mode = "oidc_proxy"` uses FastMCP's OIDC proxy and is the recommended public ChatGPT-compatible mode.
 
-For `oidc_proxy`, `server.public_base_url` must be the real HTTPS tunnel/domain without `/mcp`; ChatGPT uses `{public_base_url}/mcp`, and the IdP redirect URI is `{public_base_url}/auth/callback`. OIDC client ID and client secret must come from environment variables. `example.com` and `YOUR-...` values in docs are placeholders and do not exist.
+For `oidc_proxy`, `server.public_base_url` must be the real HTTPS tunnel/domain without `/mcp`; ChatGPT uses `{public_base_url}/mcp`, and the IdP redirect URI is `{public_base_url}/auth/callback`. OIDC scopes are non-secret config and default to `["openid"]`; add `email` and/or `profile` only if your provider policy requires those claim scopes. OIDC client ID and client secret must come from environment variables. `example.com` and `YOUR-...` values in docs are placeholders and do not exist.
 
 Public-style no-auth configurations fail closed at startup. Query-string tokens are not supported.
 

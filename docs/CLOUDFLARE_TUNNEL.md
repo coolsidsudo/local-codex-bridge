@@ -24,6 +24,7 @@ For `auth.mode = "oidc_proxy"`:
 - `server.public_base_url`: your real HTTPS Cloudflare/ngrok/other tunnel domain, without `/mcp`.
 - ChatGPT connector URL: `{public_base_url}/mcp`.
 - IdP redirect URI: `{public_base_url}/auth/callback`.
+- `oidc_scopes`: non-secret OIDC scopes; defaults to `["openid"]`. Add `email` and/or `profile` only if your provider policy requires those claim scopes.
 - Env vars: OIDC client ID and client secret.
 
 ## Setup outline

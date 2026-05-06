@@ -31,6 +31,7 @@ mode = "auto"
 #
 # mode = "oidc_proxy"
 # provider_config_url = "https://YOUR-IDP/.well-known/openid-configuration"
+# oidc_scopes = ["openid"]
 # client_id_env = "LCB_OIDC_CLIENT_ID"
 # client_secret_env = "LCB_OIDC_CLIENT_SECRET"
 #
@@ -38,6 +39,8 @@ mode = "auto"
 # - server.public_base_url: real HTTPS tunnel/domain, without /mcp
 # - ChatGPT connector URL: {public_base_url}/mcp
 # - IdP redirect URI: {public_base_url}/auth/callback
+# - oidc_scopes: non-secret OIDC scopes; default is ["openid"]
+#   Add "email" and/or "profile" only if your provider policy requires them.
 # - env vars: OIDC client ID and client secret
 #
 # Static bearer is for local/internal/test clients only. It is not the

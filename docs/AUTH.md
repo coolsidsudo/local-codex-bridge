@@ -26,6 +26,7 @@ public_base_url = "https://YOUR-REAL-TUNNEL-OR-DOMAIN"
 [auth]
 mode = "oidc_proxy"
 provider_config_url = "https://YOUR-IDP/.well-known/openid-configuration"
+oidc_scopes = ["openid"]
 client_id_env = "LCB_OIDC_CLIENT_ID"
 client_secret_env = "LCB_OIDC_CLIENT_SECRET"
 ```
@@ -45,13 +46,14 @@ Do not put OIDC client IDs or client secrets directly in TOML. LCB intentionally
 - `server.public_base_url`: your real HTTPS tunnel/domain, without `/mcp`.
 - ChatGPT connector URL: `{public_base_url}/mcp`.
 - IdP redirect URI: `{public_base_url}/auth/callback`.
+- `oidc_scopes`: non-secret OIDC scopes. The default is `["openid"]`; add `email` and/or `profile` only if your provider policy requires those claim scopes.
 - Env vars: OIDC client ID and OIDC client secret.
 
 `example.com` domains and `YOUR-...` values in this repository are placeholders. They do not exist; replace them with your real tunnel/domain and identity provider values.
 
 `server.public_base_url` is a public HTTPS origin/base only. It must start with `https://`, must not include `/mcp`, must not include a non-root path, query string, or fragment, and is normalized by removing a trailing `/`.
 
-FastMCP's OIDC proxy publishes the OAuth/OIDC support endpoints and uses `/auth/callback` by default. Local Codex Bridge does not implement a native OAuth server.
+FastMCP's OIDC proxy publishes the OAuth/OIDC support endpoints and uses `/auth/callback` by default. Local Codex Bridge passes `oidc_scopes` to FastMCP as required OIDC scopes so the authorization request includes `openid` by default. Local Codex Bridge does not implement a native OAuth server.
 
 ### Check your setup
 
@@ -61,7 +63,7 @@ Run doctor before starting the server:
 local-codex-bridge doctor --config ~/.local-codex-bridge/config.toml
 ```
 
-Doctor validates the config without starting MCP, running Codex, constructing FastMCP `OIDCProxy`, or fetching provider metadata. It prints the ChatGPT connector URL, IdP redirect URI, provider config URL, and whether required credential environment variables are set. It prints environment variable names only, never bearer tokens, OIDC client IDs, or OIDC client secrets.
+Doctor validates the config without starting MCP, running Codex, constructing FastMCP `OIDCProxy`, or fetching provider metadata. It prints the ChatGPT connector URL, IdP redirect URI, provider config URL, configured OIDC scope names, and whether required credential environment variables are set. It prints environment variable names and non-secret scope names only, never bearer tokens, OIDC client IDs, or OIDC client secrets.
 
 ## Local development modes
 

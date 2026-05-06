@@ -266,6 +266,7 @@ def render_config_toml(config: InitConfig) -> str:
         lines.extend(
             [
                 f"provider_config_url = {toml_string(config.provider_config_url or '')}",
+                'oidc_scopes = ["openid"]',
                 f"client_id_env = {toml_string(config.client_id_env)}",
                 f"client_secret_env = {toml_string(config.client_secret_env)}",
             ]

@@ -85,6 +85,7 @@ def test_oidc_interactive_config_generation_without_secrets(
         'provider_config_url = "https://idp.example.test/.well-known/openid-configuration"'
         in text
     )
+    assert 'oidc_scopes = ["openid"]' in text
     assert 'client_id_env = "LCB_OIDC_CLIENT_ID"' in text
     assert 'client_secret_env = "LCB_OIDC_CLIENT_SECRET"' in text
     assert OIDC_CLIENT_ID not in text
