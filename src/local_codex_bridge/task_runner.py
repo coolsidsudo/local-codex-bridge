@@ -3136,7 +3136,7 @@ class TaskRunner:
     ) -> list[str]:
         if relation == "equal":
             return [
-                f"git status --short --branch",
+                "git status --short --branch",
                 f"git rev-list --left-right --count {remote}/{target_branch}...{target_branch}",
             ]
         return [
