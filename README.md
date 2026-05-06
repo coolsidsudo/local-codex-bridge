@@ -376,6 +376,8 @@ For `auth.mode = "oidc_proxy"`:
 - `oidc_scopes`: non-secret OIDC scopes; defaults to `["openid"]`. Add `email` and/or `profile` only if your provider policy requires those claim scopes.
 - Env vars: OIDC client ID and client secret.
 
+For verified ChatGPT + Cloudflare Access OIDC setup and troubleshooting notes, see [docs/AUTH.md](docs/AUTH.md) and [docs/CLOUDFLARE_TUNNEL.md](docs/CLOUDFLARE_TUNNEL.md).
+
 `example.com` domains and `YOUR-...` values are placeholders. They do not exist; replace them with your real values.
 
 ## 11. Add the bridge as a ChatGPT custom MCP connector

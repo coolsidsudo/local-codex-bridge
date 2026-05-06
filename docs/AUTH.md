@@ -51,6 +51,49 @@ Do not put OIDC client IDs or client secrets directly in TOML. LCB intentionally
 
 `example.com` domains and `YOUR-...` values in this repository are placeholders. They do not exist; replace them with your real tunnel/domain and identity provider values.
 
+### Verified ChatGPT + Cloudflare Access OIDC setup
+
+A clean installed v0.3.2 server was verified end-to-end from a new ChatGPT conversation through a Cloudflare-protected public URL. The working setup used `auth.mode = "oidc_proxy"` and the default OpenID scope only; v0.3.3 documents that stability guidance and does not change OAuth/OIDC runtime behavior.
+
+LCB config:
+
+```toml
+[server]
+public_base_url = "https://YOUR-PUBLIC-BASE-URL"
+
+[auth]
+mode = "oidc_proxy"
+provider_config_url = "https://YOUR-CLOUDFLARE-OIDC-ISSUER/.well-known/openid-configuration"
+oidc_scopes = ["openid"]
+client_id_env = "LCB_OIDC_CLIENT_ID"
+client_secret_env = "LCB_OIDC_CLIENT_SECRET"
+```
+
+Credential values belong only in environment variables:
+
+```bash
+export LCB_OIDC_CLIENT_ID="your-client-id"
+export LCB_OIDC_CLIENT_SECRET="your-client-secret"
+```
+
+Cloudflare Access application:
+
+- During testing, add an **Allow** policy for the exact user email that will connect from ChatGPT.
+- If no Access policy allows that email, Cloudflare OTP emails may not arrive.
+
+Cloudflare OIDC SaaS app:
+
+- Redirect URI: `https://<public-base-url>/auth/callback`.
+- Put the client ID and client secret in `LCB_OIDC_CLIENT_ID` and `LCB_OIDC_CLIENT_SECRET`, not in TOML.
+- Use the `openid` scope.
+- Save the Cloudflare application after changing settings.
+
+ChatGPT custom MCP connector:
+
+- Server URL: `https://<public-base-url>/mcp`.
+- If ChatGPT shows a scope field, use `openid`.
+- After changing OAuth/OIDC settings, clear or delete stale connector auth and reconnect from a clean connector setup.
+
 `server.public_base_url` is a public HTTPS origin/base only. It must start with `https://`, must not include `/mcp`, must not include a non-root path, query string, or fragment, and is normalized by removing a trailing `/`.
 
 FastMCP's OIDC proxy publishes the OAuth/OIDC support endpoints and uses `/auth/callback` by default. Local Codex Bridge passes `oidc_scopes` to FastMCP as required OIDC scopes so the authorization request includes `openid` by default. Local Codex Bridge also exposes `/.well-known/openid-configuration` in `oidc_proxy` mode as a compatibility discovery alias for clients that probe OpenID Discovery. This alias points at the existing OAuth proxy endpoints and intentionally omits `jwks_uri`; Local Codex Bridge does not expose a public JWKS document and does not implement a native OAuth/OIDC server.
@@ -106,6 +149,14 @@ local-codex-bridge serve --config ~/.local-codex-bridge/config.toml
 Do not put token literal values in TOML. LCB intentionally supports only env-var indirection for this mode and will not print token values in startup output or validation errors. Unknown `[auth]` fields, empty scope lists, and blank scope strings are rejected.
 
 `static_bearer` is for local, internal, and automated test clients that can send a standard `Authorization: Bearer ...` header. It is not the recommended public ChatGPT custom MCP path.
+
+## ChatGPT OIDC troubleshooting
+
+- `scopes_supported: []` in discovery metadata means OIDC scopes are not configured or passed to FastMCP. This was fixed in v0.3.1 by defaulting `auth.oidc_scopes` to `["openid"]` and passing those scopes to `OIDCProxy`.
+- `GET /.well-known/openid-configuration` returning `404` means the OpenID discovery compatibility route is missing. This was fixed in v0.3.2 for `auth.mode = "oidc_proxy"`.
+- No Cloudflare OTP email usually means the Cloudflare Access policy does not allow the connecting email, or there is a normal email delivery/filtering issue. Verify the exact email is allowed before changing LCB.
+- `/token` returning `200` followed by `/mcp` returning `401` can be caused by stale ChatGPT connector auth or mismatched/unsaved connector and Cloudflare settings. Re-test with a clean connector setup and confirm the Cloudflare app settings are saved.
+- Do not expose secrets, paste tokens into logs, or ask users to provide token/header dumps when troubleshooting.
 
 ## Public and tunnel deployments
 
