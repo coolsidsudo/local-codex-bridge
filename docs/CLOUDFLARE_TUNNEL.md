@@ -27,6 +27,41 @@ For `auth.mode = "oidc_proxy"`:
 - `oidc_scopes`: non-secret OIDC scopes; defaults to `["openid"]`. Add `email` and/or `profile` only if your provider policy requires those claim scopes.
 - Env vars: OIDC client ID and client secret.
 
+## Verified ChatGPT + Cloudflare Access OIDC setup
+
+This Cloudflare setup was verified end-to-end with a clean installed v0.3.2 server and a new ChatGPT custom MCP connector conversation. v0.3.3 documents the stable setup only; it does not change OAuth/OIDC runtime behavior.
+
+LCB config:
+
+```toml
+[auth]
+mode = "oidc_proxy"
+oidc_scopes = ["openid"]
+client_id_env = "LCB_OIDC_CLIENT_ID"
+client_secret_env = "LCB_OIDC_CLIENT_SECRET"
+```
+
+Use `LCB_OIDC_CLIENT_ID` and `LCB_OIDC_CLIENT_SECRET` for credential values. Do not put client IDs or client secrets in TOML.
+
+Cloudflare Access application:
+
+- Add an **Allow** policy for the exact user email during testing.
+- If no policy allows that email, Cloudflare OTP emails may not arrive.
+
+Cloudflare OIDC SaaS app:
+
+- Redirect URI: `https://<public-base-url>/auth/callback`.
+- Use the `openid` scope.
+- Save the application after settings changes.
+
+ChatGPT custom MCP connector:
+
+- Server URL: `https://<public-base-url>/mcp`.
+- If a scope field is required, use `openid`.
+- After changing OAuth/OIDC settings, clear or delete stale connector auth and reconnect cleanly.
+
+For full auth details, see [AUTH.md](AUTH.md).
+
 ## Setup outline
 
 This outline uses a locally managed named tunnel. Adjust commands for your operating system and Cloudflare account policy.
@@ -137,6 +172,14 @@ Using only the hostname may reach Cloudflare but not the MCP endpoint.
 ### Cloudflare Access blocks the connector
 
 Cloudflare Access / Zero Trust protection can be useful, but it is not a replacement for LCB auth. The connector must be able to satisfy the configured auth policy. Do not disable LCB authentication for public exposure. Static bearer is not the recommended public ChatGPT-compatible mode; use `auth.mode = "oidc_proxy"` for public connector use.
+
+### ChatGPT + Cloudflare Access OIDC checks
+
+- `scopes_supported: []` indicates OIDC scopes are not configured or passed; v0.3.1 fixed this by passing `auth.oidc_scopes`, defaulting to `["openid"]`.
+- `GET /.well-known/openid-configuration` returning `404` indicates the OpenID discovery compatibility route is missing; v0.3.2 fixed this for `oidc_proxy` mode.
+- No Cloudflare OTP email usually means the Access policy does not allow the exact email, or there is an email delivery/filtering issue.
+- `/token` `200` followed by `/mcp` `401` can come from stale connector auth or mismatched/unsaved connector and Cloudflare settings. Verify with a clean ChatGPT connector setup and confirm Cloudflare app settings are saved.
+- Do not expose secrets or paste tokens/headers into logs while troubleshooting.
 
 ### ChatGPT developer MCP `FORBIDDEN`
 

@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-05-06
+
+### Documentation
+
+- Added stability guidance for the verified ChatGPT custom MCP connector setup using Cloudflare Tunnel, Cloudflare Access, and `auth.mode = "oidc_proxy"`.
+- Documented Cloudflare Access policy, OIDC SaaS app, connector URL, scope, and stale connector-auth checks from the verified end-to-end v0.3.2 setup.
+- Clarified that this release makes no OAuth/OIDC runtime behavior changes.
+
 ## [0.3.2] - 2026-05-06
 
 ### Fixed
