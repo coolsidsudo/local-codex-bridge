@@ -518,6 +518,81 @@ def test_static_bearer_whitespace_only_env_var_fails_without_leaking_value(
     assert "LCB_AUTH_TOKEN" in message
     assert WHITESPACE_TOKEN not in message
 
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("oidc_scopes", "expected_scopes"),
+    [
+        (None, ["openid"]),
+        (["openid", "email", "profile"], ["openid", "email", "profile"]),
+    ],
+)
+async def test_oidc_openid_configuration_compatibility_route_returns_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    oidc_scopes: list[str] | None,
+    expected_scopes: list[str],
+) -> None:
+    set_oidc_env(monkeypatch)
+    monkeypatch.setattr("local_codex_bridge.server.build_auth_provider", lambda _cfg: None)
+    auth_kwargs = {
+        "mode": "oidc_proxy",
+        "provider_config_url": "https://idp.example.test/.well-known/openid-configuration",
+    }
+    if oidc_scopes is not None:
+        auth_kwargs["oidc_scopes"] = oidc_scopes
+    cfg = BridgeConfig(
+        server=ServerConfig(
+            public_base_url="https://lcb.example.test",
+            task_dir=tmp_path / "tasks",
+        ),
+        auth=AuthConfig(**auth_kwargs),
+        projects={"demo": ProjectConfig(name="Demo", path=make_project(tmp_path))},
+    )
+    mcp = build_mcp(cfg)
+
+    async with run_server_async(mcp, transport="streamable-http", path="/mcp") as url:
+        origin = url.removesuffix("/mcp")
+        async with httpx.AsyncClient() as http_client:
+            response = await http_client.get(f"{origin}/.well-known/openid-configuration")
+
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "public, max-age=3600"
+    assert response.json() == {
+        "issuer": "https://lcb.example.test/",
+        "authorization_endpoint": "https://lcb.example.test/authorize",
+        "token_endpoint": "https://lcb.example.test/token",
+        "registration_endpoint": "https://lcb.example.test/register",
+        "scopes_supported": expected_scopes,
+        "response_types_supported": ["code"],
+        "grant_types_supported": ["authorization_code", "refresh_token"],
+        "token_endpoint_auth_methods_supported": [
+            "client_secret_post",
+            "client_secret_basic",
+        ],
+        "code_challenge_methods_supported": ["S256"],
+        "client_id_metadata_document_supported": True,
+    }
+    assert "jwks_uri" not in response.json()
+
+
+@pytest.mark.anyio
+async def test_default_no_auth_does_not_expose_openid_configuration_route(
+    tmp_path: Path,
+) -> None:
+    cfg = BridgeConfig(
+        server=ServerConfig(task_dir=tmp_path / "tasks"),
+        projects={"demo": ProjectConfig(name="Demo", path=make_project(tmp_path))},
+    )
+    mcp = build_mcp(cfg)
+
+    async with run_server_async(mcp, transport="streamable-http", path="/mcp") as url:
+        origin = url.removesuffix("/mcp")
+        async with httpx.AsyncClient() as http_client:
+            response = await http_client.get(f"{origin}/.well-known/openid-configuration")
+
+    assert response.status_code == 404
+
 def test_static_bearer_with_env_builds_fastmcp_with_auth(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

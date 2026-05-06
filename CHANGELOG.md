@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-05-06
+
+### Fixed
+
+- Added an `auth.mode = "oidc_proxy"` compatibility response for `GET /.well-known/openid-configuration` so clients that probe OpenID Discovery can discover the existing FastMCP OAuth proxy endpoints. The response intentionally omits `jwks_uri` because LCB does not expose a public JWKS document for FastMCP-issued tokens.
+
+## [0.3.1] - 2026-05-06
+
 ### Fixed
 
 - Added configurable OIDC scopes for `auth.mode = "oidc_proxy"`, defaulting narrowly to `["openid"]`, and passed them to FastMCP `OIDCProxy` as `required_scopes` so OAuth/OIDC metadata and upstream authorization requests include the required OpenID scope.

@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from fastmcp import FastMCP
+from starlette.responses import JSONResponse
 
 from .auth import build_auth_provider
 from .config import BridgeConfig
@@ -13,7 +14,38 @@ from .task_runner import TaskRunner
 def build_mcp(config: str | Path | BridgeConfig) -> FastMCP:
     cfg = config if isinstance(config, BridgeConfig) else BridgeConfig.load(config)
     runner = TaskRunner(cfg)
-    mcp = FastMCP("Local Codex Bridge", auth=build_auth_provider(cfg))
+    auth_provider = build_auth_provider(cfg)
+    mcp = FastMCP("Local Codex Bridge", auth=auth_provider)
+
+    if cfg.auth.mode == "oidc_proxy":
+        public_base_url = cfg.server.public_base_url
+        if public_base_url is None:  # pragma: no cover - BridgeConfig validates this.
+            raise ValueError("auth.mode='oidc_proxy' requires public_base_url")
+
+        @mcp.custom_route(
+            "/.well-known/openid-configuration",
+            methods=["GET"],
+            include_in_schema=False,
+        )
+        async def openid_configuration(_request: Any) -> JSONResponse:
+            return JSONResponse(
+                {
+                    "issuer": f"{public_base_url}/",
+                    "authorization_endpoint": f"{public_base_url}/authorize",
+                    "token_endpoint": f"{public_base_url}/token",
+                    "registration_endpoint": f"{public_base_url}/register",
+                    "scopes_supported": list(cfg.auth.oidc_scopes),
+                    "response_types_supported": ["code"],
+                    "grant_types_supported": ["authorization_code", "refresh_token"],
+                    "token_endpoint_auth_methods_supported": [
+                        "client_secret_post",
+                        "client_secret_basic",
+                    ],
+                    "code_challenge_methods_supported": ["S256"],
+                    "client_id_metadata_document_supported": True,
+                },
+                headers={"Cache-Control": "public, max-age=3600"},
+            )
 
     @mcp.tool
     def list_projects() -> dict[str, Any]:
