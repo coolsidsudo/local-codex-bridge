@@ -137,14 +137,14 @@ For a pinned release install, use the GitHub tag. This is the recommended user i
 With `pipx`:
 
 ```bash
-pipx install "git+https://github.com/coolsidsudo/local-codex-bridge.git@v0.3.0"
+pipx install "git+https://github.com/coolsidsudo/local-codex-bridge.git@v0.3.4"
 local-codex-bridge --help
 ```
 
 With `uv`:
 
 ```bash
-uv tool install "git+https://github.com/coolsidsudo/local-codex-bridge.git@v0.3.0"
+uv tool install "git+https://github.com/coolsidsudo/local-codex-bridge.git@v0.3.4"
 local-codex-bridge --help
 ```
 

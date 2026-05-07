@@ -351,7 +351,9 @@ def test_codex_bin_env_is_used_when_global_bin_is_default(
 
 def test_start_codex_task_dry_run_without_review_contract_keeps_prompt(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.delenv("LCB_CODEX_BIN", raising=False)
     runner, _, task_dir = make_runner(tmp_path)
     result = runner.start_codex_task("demo", "Implement the thing.\n", dry_run=True)
 
@@ -367,7 +369,9 @@ def test_start_codex_task_dry_run_without_review_contract_keeps_prompt(
 
 def test_start_codex_task_dry_run_with_review_contract_appends_footer(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.delenv("LCB_CODEX_BIN", raising=False)
     runner, _, task_dir = make_runner(tmp_path)
     result = runner.start_codex_task(
         "demo",
