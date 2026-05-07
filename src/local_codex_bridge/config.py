@@ -21,6 +21,7 @@ class ProjectConfig(BaseModel):
 
     name: str
     path: Path
+    codex_bin: str | None = None
     default_model: str | None = None
     verification: dict[str, list[str]] = Field(default_factory=dict)
 
@@ -28,6 +29,16 @@ class ProjectConfig(BaseModel):
     @classmethod
     def expand_project_path(cls, value: Path) -> Path:
         return Path(value).expanduser().resolve()
+
+    @field_validator("codex_bin")
+    @classmethod
+    def non_empty_codex_bin(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        if not value:
+            raise ValueError("must not be empty")
+        return value
 
 
 class ServerConfig(BaseModel):
@@ -73,6 +84,14 @@ class ServerConfig(BaseModel):
     @classmethod
     def expand_task_dir(cls, value: Path) -> Path:
         return Path(value).expanduser().resolve()
+
+    @field_validator("codex_bin")
+    @classmethod
+    def non_empty_codex_bin(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("must not be empty")
+        return value
 
     @property
     def is_loopback(self) -> bool:

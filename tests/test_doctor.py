@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from typer.testing import CliRunner
@@ -26,6 +27,7 @@ def write_config(
     public_base_url: str | None = None,
     provider_config_url: str = "https://idp.example.test/.well-known/openid-configuration",
     task_dir: Path | None = None,
+    codex_bin: str | None = None,
     auth_block: str | None = None,
 ) -> Path:
     project_dir = make_project(tmp_path)
@@ -38,7 +40,7 @@ def write_config(
 host = "{host}"
 port = 8765
 {public_line}task_dir = "{task_dir or tmp_path / 'tasks'}"
-codex_bin = "codex"
+codex_bin = "{codex_bin or sys.executable}"
 default_model = "gpt-5.5"
 default_codex_args = ["--json"]
 
@@ -77,6 +79,18 @@ def oidc_auth_block(
 
 def run_doctor(config_file: Path):
     return CliRunner().invoke(app, ["doctor", "--config", str(config_file)])
+
+
+def test_doctor_missing_codex_cli_preflight_exits_one_with_hint(tmp_path: Path) -> None:
+    cfg_file = write_config(tmp_path, codex_bin="definitely-missing-codex")
+
+    result = run_doctor(cfg_file)
+
+    assert result.exit_code == 1
+    assert "Codex CLI (demo) status:" in result.output
+    assert "missing_executable" in result.output
+    assert "definitely-missing-codex" in result.output
+    assert "LCB_CODEX_BIN" in result.output
 
 
 def test_oidc_doctor_prints_setup_values_without_secrets_or_oidc_proxy(

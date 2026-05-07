@@ -66,6 +66,11 @@ def build_mcp(config: str | Path | BridgeConfig) -> FastMCP:
         return runner.project_status(project_id)
 
     @mcp.tool
+    def check_codex_cli(project_id: str) -> dict[str, Any]:
+        """Report whether the configured Codex CLI is available for task launches."""
+        return runner.codex_preflight(project_id)
+
+    @mcp.tool
     def start_codex_task(
         project_id: str,
         prompt: str,

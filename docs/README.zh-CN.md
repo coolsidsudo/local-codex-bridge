@@ -70,7 +70,8 @@ GitHub 或其他 VCS host
 只使用这些工具，就可以把 LCB 当作轻量 bridge：
 
 - `list_projects` — 列出已配置的项目 profiles。
-- `get_project_status` — 返回项目的 git status、HEAD 和 remotes。
+- `get_project_status` — 返回项目的 git status、HEAD、remotes 和 Codex CLI preflight。
+- `check_codex_cli` — 返回配置的 Codex 可执行文件、PATH lookup、版本检查、启动 cwd 和修复提示。
 - `start_codex_task` — 在已配置项目中启动 `codex exec`。可选的 `review_contract` 会追加面向审查的简洁输出 guidance。
 - `get_task` — 读取任务元数据和 stdout / stderr 尾部。
 - `list_tasks` — 列出最近的 bridge 任务记录。
@@ -236,7 +237,7 @@ default_model = "gpt-5.5"
 
 [projects.my_project.verification]
 git_status = ["git", "status", "--short", "--branch"]
-test = ["python", "-m", "pytest"]
+test = ["python3", "-m", "pytest"]
 ```
 
 文档站点项目示例：
@@ -402,6 +403,7 @@ https://example-name.ngrok-free.dev/mcp
 ```text
 list_projects
 get_project_status
+check_codex_cli
 start_codex_task
 get_task
 list_tasks

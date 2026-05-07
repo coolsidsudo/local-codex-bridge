@@ -10,7 +10,9 @@ port = 8765
 # Where bridge task logs are stored.
 task_dir = "~/.local-codex-bridge/tasks"
 
-# Default local Codex binary.
+# Default local Codex binary. Prefer an absolute path when the bridge process
+# does not inherit your interactive shell PATH. LCB_CODEX_BIN can override the
+# default "codex" lookup without changing this file.
 codex_bin = "codex"
 
 # Default model passed to local Codex. Change if your local CLI exposes a different id.
@@ -58,12 +60,14 @@ mode = "auto"
 name = "Example Project"
 path = "~/Projects/example-project"
 default_model = "gpt-5.5"
+# Optional per-project Codex binary override.
+# codex_bin = "/absolute/path/to/codex"
 
 # Verification commands are allowlisted by key.
 # They run with shell=False. Each command is an argv array.
 [projects.example.verification]
 git_status = ["git", "status", "--short", "--branch"]
-pytest = ["python", "-m", "pytest"]
+pytest = ["python3", "-m", "pytest"]
 
 # Add more projects by creating additional [projects.<id>] sections.
 #
