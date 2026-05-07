@@ -5,6 +5,7 @@ import os
 import posixpath
 import re
 import signal
+import shutil
 import subprocess
 import time
 import uuid
@@ -84,6 +85,11 @@ CHANGED_FILE_TEXT_MIN_READ_BYTES = 4096
 CHANGED_FILE_TEXT_UTF8_BOUNDARY_BYTES = 4
 CHANGED_FILE_TEXT_MAX_READ_BYTES = 1024 * 1024
 VERIFICATION_OUTPUT_MAX_CHARS = 40000
+CODEX_BIN_ENV = "LCB_CODEX_BIN"
+CODEX_REMEDIATION_HINT = (
+    "Install the Codex CLI, ensure it is on the bridge process PATH, or set "
+    "server.codex_bin, projects.<id>.codex_bin, or LCB_CODEX_BIN to an executable path."
+)
 
 
 def _apply_review_contract(prompt: str) -> tuple[str, bool]:
@@ -146,9 +152,77 @@ class TaskRunner:
             "project_id": project_id,
             "name": project.name,
             "path": str(project.path),
+            "codex": self.codex_preflight(project_id),
             "git": self._run(project.path, ["git", "status", "--short", "--branch"], timeout=20),
             "head": self._run(project.path, ["git", "rev-parse", "HEAD"], timeout=20),
             "remotes": self._run(project.path, ["git", "remote", "-v"], timeout=20),
+        }
+
+    def codex_preflight(self, project_id: str) -> dict[str, Any]:
+        project = self._project(project_id)
+        info = self._codex_executable_info(project)
+        result: dict[str, Any] = {
+            "status": "ok" if info["resolved_path"] else "missing_executable",
+            "project_id": project_id,
+            "cwd": str(project.path),
+            "bridge_process_path": info["path_env"],
+            "path_env": info["path_env"],
+            "configured_codex_bin": info["configured_codex_bin"],
+            "project_codex_bin": info["project_codex_bin"],
+            "global_codex_bin": info["global_codex_bin"],
+            "env_var": CODEX_BIN_ENV,
+            "env_codex_bin": info["env_codex_bin"],
+            "selected_source": info["selected_source"],
+            "selected_executable": info["selected_executable"],
+            "resolved_path": info["resolved_path"],
+            "resolution_candidates": info["resolution_candidates"],
+        }
+        if info["resolved_path"]:
+            version = self._run(
+                project.path,
+                [info["resolved_path"], "--version"],
+                timeout=20,
+                max_chars=4000,
+            )
+            result["version"] = version
+            if version["returncode"] != 0:
+                result["status"] = "version_failed"
+                result["failure"] = "codex --version exited nonzero"
+        else:
+            result["failure"] = "Codex executable is not available to the bridge process"
+            result["remediation_hint"] = CODEX_REMEDIATION_HINT
+        return result
+
+    def _codex_executable_info(self, project: ProjectConfig) -> dict[str, Any]:
+        path_env = os.environ.get("PATH", "")
+        env_codex_bin = os.environ.get(CODEX_BIN_ENV, "").strip() or None
+        global_codex_bin = self.config.server.codex_bin.strip()
+        candidates: list[dict[str, str]] = []
+
+        if project.codex_bin:
+            candidates.append({"source": "project", "executable": project.codex_bin})
+        if global_codex_bin and global_codex_bin != "codex":
+            candidates.append({"source": "global", "executable": global_codex_bin})
+        if env_codex_bin:
+            candidates.append({"source": "environment", "executable": env_codex_bin})
+        if global_codex_bin == "codex":
+            candidates.append({"source": "global_default", "executable": global_codex_bin})
+        if not candidates:
+            candidates.append({"source": "fallback_display", "executable": "codex"})
+
+        selected = candidates[0]
+        selected_executable = selected["executable"]
+        resolved_path = shutil.which(selected_executable)
+        return {
+            "configured_codex_bin": project.codex_bin or global_codex_bin,
+            "project_codex_bin": project.codex_bin,
+            "global_codex_bin": global_codex_bin,
+            "env_codex_bin": env_codex_bin,
+            "selected_source": selected["source"],
+            "selected_executable": selected_executable,
+            "resolved_path": resolved_path,
+            "path_env": path_env,
+            "resolution_candidates": candidates,
         }
 
     def start_codex_task(
@@ -171,7 +245,8 @@ class TaskRunner:
         rec.prompt_path.write_text(effective_prompt, encoding="utf-8")
 
         effective_model = model or project.default_model or self.config.server.default_model
-        cmd = [self.config.server.codex_bin, "exec"]
+        codex_info = self._codex_executable_info(project)
+        cmd = [codex_info["selected_executable"], "exec"]
         if effective_model:
             cmd += ["-m", effective_model]
         cmd += list(self.config.server.default_codex_args)
@@ -184,6 +259,20 @@ class TaskRunner:
             "project_path": str(project.path),
             "model": effective_model,
             "cmd": cmd,
+            "attempted_executable": codex_info["selected_executable"],
+            "cwd": str(project.path),
+            "path_env": codex_info["path_env"],
+            "codex_executable": {
+                "configured_codex_bin": codex_info["configured_codex_bin"],
+                "project_codex_bin": codex_info["project_codex_bin"],
+                "global_codex_bin": codex_info["global_codex_bin"],
+                "env_var": CODEX_BIN_ENV,
+                "env_codex_bin": codex_info["env_codex_bin"],
+                "selected_source": codex_info["selected_source"],
+                "selected_executable": codex_info["selected_executable"],
+                "resolved_path": codex_info["resolved_path"],
+                "resolution_candidates": codex_info["resolution_candidates"],
+            },
             "dry_run": dry_run,
             "review_contract_requested": review_contract,
             "review_contract_version": REVIEW_CONTRACT_VERSION if review_contract else None,
@@ -200,22 +289,54 @@ class TaskRunner:
         stderr = rec.stderr_path.open("wb")
         prompt_stdin = rec.prompt_path.open("rb")
 
-        proc = subprocess.Popen(
-            cmd,
-            cwd=str(project.path),
-            stdin=prompt_stdin,
-            stdout=stdout,
-            stderr=stderr,
-            shell=False,
-            start_new_session=True,
-        )
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                cwd=str(project.path),
+                stdin=prompt_stdin,
+                stdout=stdout,
+                stderr=stderr,
+                shell=False,
+                start_new_session=True,
+            )
+        except OSError as exc:
+            stdout.close()
+            stderr.close()
+            prompt_stdin.close()
+            ended_at = time.time()
+            meta.update(
+                {
+                    "status": "failed_to_start",
+                    "returncode": None,
+                    "spawn_error": str(exc),
+                    "ended_at": ended_at,
+                    "remediation_hint": CODEX_REMEDIATION_HINT,
+                }
+            )
+            rec.meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+            return {
+                "task_id": task_id,
+                "status": "failed_to_start",
+                "returncode": None,
+                "spawn_error": str(exc),
+                "cmd": cmd,
+                "attempted_executable": codex_info["selected_executable"],
+                "cwd": str(project.path),
+                "path_env": codex_info["path_env"],
+                "created_at": meta["created_at"],
+                "ended_at": ended_at,
+                "remediation_hint": CODEX_REMEDIATION_HINT,
+            }
+        stdout.close()
+        stderr.close()
+        prompt_stdin.close()
         rec.pid_path.write_text(str(proc.pid), encoding="utf-8")
         return {"task_id": task_id, "status": "running", "pid": proc.pid, "cmd": cmd}
 
     def get_task(self, task_id: str, max_chars: int = 20000) -> dict[str, Any]:
         rec = self._task_record(task_id)
         meta = json.loads(rec.meta_path.read_text(encoding="utf-8"))
-        status = self._status_from_pid(rec)
+        status = self._current_task_status(meta, rec.pid_path)
         meta["status"] = status
         rec.meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
@@ -1242,12 +1363,26 @@ class TaskRunner:
     ) -> dict[str, Any]:
         project = self._project(project_id)
         cmd = self._resolve_verification_command(project, command_key)
-        return self._run(
+        result = self._run(
             project.path,
             cmd,
             timeout=timeout,
             max_chars=VERIFICATION_OUTPUT_MAX_CHARS,
         )
+        result["command_key"] = command_key
+        result["status"] = "passed" if result["returncode"] == 0 else "failed"
+        if result["returncode"] == 127:
+            result["reason"] = "executable not found"
+        elif result["returncode"] != 0:
+            result["reason"] = "nonzero exit status"
+            if not result.get("stderr"):
+                result["hint"] = (
+                    "Command exited nonzero without stderr; run directly or make the script "
+                    "print failing checks."
+                )
+        else:
+            result["reason"] = None
+        return result
 
     def run_verification_bundle(
         self,
@@ -3155,7 +3290,7 @@ class TaskRunner:
             if meta_path.exists():
                 try:
                     meta = json.loads(meta_path.read_text(encoding="utf-8"))
-                    meta["status"] = self._status_from_pid_path(task_dir / "pid")
+                    meta["status"] = self._current_task_status(meta, task_dir / "pid")
                     items.append(meta)
                 except Exception as exc:  # noqa: BLE001
                     items.append({"task_id": task_dir.name, "error": str(exc)})
@@ -4895,6 +5030,15 @@ class TaskRunner:
 
     def _status_from_pid(self, rec: TaskRecord) -> str:
         return self._status_from_pid_path(rec.pid_path)
+
+    def _current_task_status(self, meta: dict[str, Any], pid_path: Path) -> str:
+        pid_status = self._status_from_pid_path(pid_path)
+        if pid_status != "unknown":
+            return pid_status
+        meta_status = meta.get("status")
+        if meta_status in {"dry_run", "failed_to_start"}:
+            return meta_status
+        return pid_status
 
     def _status_from_pid_path(self, pid_path: Path) -> str:
         if not pid_path.exists():

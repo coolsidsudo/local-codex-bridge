@@ -247,9 +247,113 @@ def test_run_verification_bundle_missing_executable_returns_failure_evidence(
     assert "definitely-missing-lcb-executable" in item["stderr"]
 
 
+def test_run_verification_reports_silent_nonzero_hint(tmp_path: Path) -> None:
+    runner, _ = make_verification_runner(tmp_path)
+    runner.config.projects["demo"].verification["silent_fail"] = [
+        sys.executable,
+        "-c",
+        "import sys; sys.exit(5)",
+    ]
+
+    result = runner.run_verification("demo", "silent_fail")
+
+    assert result["status"] == "failed"
+    assert result["returncode"] == 5
+    assert result["reason"] == "nonzero exit status"
+    assert result["stderr"] == ""
+    assert "Command exited nonzero without stderr" in result["hint"]
+
+
+def test_codex_preflight_reports_missing_executable_clearly(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PATH", "")
+    project = tmp_path / "project"
+    project.mkdir()
+    cfg = BridgeConfig(
+        server=ServerConfig(task_dir=tmp_path / "tasks", codex_bin="definitely-missing-codex"),
+        projects={"demo": ProjectConfig(name="Demo", path=project)},
+    )
+    runner = TaskRunner(cfg)
+
+    result = runner.codex_preflight("demo")
+
+    assert result["status"] == "missing_executable"
+    assert result["configured_codex_bin"] == "definitely-missing-codex"
+    assert result["selected_executable"] == "definitely-missing-codex"
+    assert result["resolved_path"] is None
+    assert result["bridge_process_path"] == ""
+    assert result["path_env"] == ""
+    assert result["cwd"] == str(project)
+    assert "Codex executable is not available" in result["failure"]
+    assert "LCB_CODEX_BIN" in result["remediation_hint"]
+
+
+def test_start_codex_task_spawn_failure_persists_failed_to_start(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PATH", "/test/path")
+    runner, _, task_dir = make_runner(tmp_path)
+    runner.config.server.codex_bin = "definitely-missing-codex"
+
+    result = runner.start_codex_task("demo", "Implement the thing.\n")
+
+    assert result["status"] == "failed_to_start"
+    assert result["returncode"] is None
+    assert result["cmd"] == ["definitely-missing-codex", "exec", "-m", "gpt-5.5", "--json"]
+    assert result["attempted_executable"] == "definitely-missing-codex"
+    assert result["path_env"] == "/test/path"
+    assert "definitely-missing-codex" in result["spawn_error"]
+    assert "LCB_CODEX_BIN" in result["remediation_hint"]
+
+    prompt, meta = read_task_record(task_dir, result["task_id"])
+    assert prompt == "Implement the thing.\n"
+    assert meta["status"] == "failed_to_start"
+    assert meta["returncode"] is None
+    assert meta["cmd"] == result["cmd"]
+    assert meta["attempted_executable"] == "definitely-missing-codex"
+    assert meta["cwd"] == result["cwd"]
+    assert meta["path_env"] == "/test/path"
+    assert "definitely-missing-codex" in meta["spawn_error"]
+    assert isinstance(meta["created_at"], float)
+    assert isinstance(meta["ended_at"], float)
+    assert meta["ended_at"] >= meta["created_at"]
+
+    task = runner.get_task(result["task_id"])
+    assert task["status"] == "failed_to_start"
+    assert task["meta"]["status"] == "failed_to_start"
+    assert task["stdout_tail"] == ""
+    assert task["stderr_tail"] == ""
+
+    listed = runner.list_tasks()
+    assert listed[0]["task_id"] == result["task_id"]
+    assert listed[0]["status"] == "failed_to_start"
+    assert listed[0]["spawn_error"] == meta["spawn_error"]
+    assert listed[0]["cmd"] == result["cmd"]
+    assert listed[0]["cwd"] == result["cwd"]
+    assert listed[0]["path_env"] == "/test/path"
+    assert "ended_at" in listed[0]
+
+
+def test_codex_bin_env_is_used_when_global_bin_is_default(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner, _, _ = make_runner(tmp_path)
+    monkeypatch.setenv("LCB_CODEX_BIN", "/custom/codex")
+
+    result = runner.start_codex_task("demo", "Implement the thing.\n", dry_run=True)
+
+    assert result["cmd"] == ["/custom/codex", "exec", "-m", "gpt-5.5", "--json"]
+
+
 def test_start_codex_task_dry_run_without_review_contract_keeps_prompt(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.delenv("LCB_CODEX_BIN", raising=False)
     runner, _, task_dir = make_runner(tmp_path)
     result = runner.start_codex_task("demo", "Implement the thing.\n", dry_run=True)
 
@@ -265,7 +369,9 @@ def test_start_codex_task_dry_run_without_review_contract_keeps_prompt(
 
 def test_start_codex_task_dry_run_with_review_contract_appends_footer(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.delenv("LCB_CODEX_BIN", raising=False)
     runner, _, task_dir = make_runner(tmp_path)
     result = runner.start_codex_task(
         "demo",

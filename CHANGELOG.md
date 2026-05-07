@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-05-07
+
+### Fixed
+
+- Added Codex CLI preflight diagnostics for doctor, project status, and the `check_codex_cli` MCP tool, including PATH, configured executable, resolved path, version, launch cwd, and remediation hints.
+- Persisted `failed_to_start` task metadata when Codex CLI spawning fails, including executable resolution, cwd, PATH, spawn error, and remediation hint.
+- Made `doctor` exit nonzero when Codex CLI preflight fails.
+- Improved verification failure diagnostics for missing executables and silent nonzero exits.
+
 ## [0.3.3] - 2026-05-06
 
 ### Documentation

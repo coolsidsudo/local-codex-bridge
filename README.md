@@ -70,7 +70,8 @@ The current runtime exposes the following tools. Runtime profiles are not implem
 These tools are enough to use LCB as a lightweight bridge:
 
 - `list_projects` — list configured project profiles.
-- `get_project_status` — report git status, HEAD, and remotes for a project.
+- `get_project_status` — report git status, HEAD, remotes, and Codex CLI preflight for a project.
+- `check_codex_cli` — report the configured Codex executable, PATH lookup, version check, launch cwd, and remediation hint.
 - `start_codex_task` — start `codex exec` in a configured project. Optional `review_contract` appends bridge-owned guidance for concise review-oriented summaries.
 - `get_task` — read task metadata and stdout/stderr tails.
 - `list_tasks` — list recent bridge task records.
@@ -136,14 +137,14 @@ For a pinned release install, use the GitHub tag. This is the recommended user i
 With `pipx`:
 
 ```bash
-pipx install "git+https://github.com/coolsidsudo/local-codex-bridge.git@v0.3.0"
+pipx install "git+https://github.com/coolsidsudo/local-codex-bridge.git@v0.3.4"
 local-codex-bridge --help
 ```
 
 With `uv`:
 
 ```bash
-uv tool install "git+https://github.com/coolsidsudo/local-codex-bridge.git@v0.3.0"
+uv tool install "git+https://github.com/coolsidsudo/local-codex-bridge.git@v0.3.4"
 local-codex-bridge --help
 ```
 
@@ -225,6 +226,7 @@ Example generic profile:
 host = "127.0.0.1"
 port = 8765
 task_dir = "~/.local-codex-bridge/tasks"
+# Use an absolute path here if the bridge process PATH cannot find codex.
 codex_bin = "codex"
 default_model = "gpt-5.5"
 default_codex_args = ["--json"]
@@ -233,11 +235,18 @@ default_codex_args = ["--json"]
 name = "My Project"
 path = "~/Projects/my-project"
 default_model = "gpt-5.5"
+# Optional per-project override:
+# codex_bin = "/absolute/path/to/codex"
 
 [projects.my_project.verification]
 git_status = ["git", "status", "--short", "--branch"]
-test = ["python", "-m", "pytest"]
+test = ["python3", "-m", "pytest"]
 ```
+
+Codex executable resolution is project override, non-default server `codex_bin`,
+`LCB_CODEX_BIN`, then bridge-process `PATH` lookup for the default `codex`.
+`doctor`, `get_project_status`, and `check_codex_cli` show the bridge process `PATH`,
+launch cwd, resolved executable, and `codex --version` result.
 
 Example docs-site profile:
 
@@ -405,6 +414,7 @@ After connecting, ChatGPT settings should show the bridge actions, including:
 ```text
 list_projects
 get_project_status
+check_codex_cli
 start_codex_task
 get_task
 list_tasks

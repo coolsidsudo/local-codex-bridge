@@ -107,6 +107,25 @@ def doctor(
     print(f"[cyan]Auth mode:[/cyan] {auth.mode}")
     print(f"[cyan]Server bind:[/cyan] {cfg.server.host}:{cfg.server.port}")
     print(f"[cyan]Public base URL:[/cyan] {public_base_url or '(not configured)'}")
+    print(f"[cyan]Bridge process PATH:[/cyan] {os.environ.get('PATH', '')}")
+
+    runner = TaskRunner(cfg)
+    for project_id in sorted(cfg.projects):
+        preflight = runner.codex_preflight(project_id)
+        status = preflight["status"]
+        color = "green" if status == "ok" else "red"
+        print(f"[cyan]Codex CLI ({project_id}) status:[/cyan] [{color}]{status}[/{color}]")
+        print(f"[cyan]Codex CLI ({project_id}) configured:[/cyan] {preflight['configured_codex_bin']}")
+        print(f"[cyan]Codex CLI ({project_id}) resolved:[/cyan] {preflight['resolved_path'] or '(missing)'}")
+        print(f"[cyan]Codex CLI ({project_id}) launch cwd:[/cyan] {preflight['cwd']}")
+        if status != "ok":
+            ok = False
+        if preflight.get("version"):
+            version = preflight["version"]
+            version_text = version["stdout"].strip() or version["stderr"].strip()
+            print(f"[cyan]Codex CLI ({project_id}) version:[/cyan] {version_text or '(empty)'}")
+        if preflight.get("remediation_hint"):
+            print(f"[yellow]Codex CLI ({project_id}) hint:[/yellow] {preflight['remediation_hint']}")
 
     if auth.mode == "oidc_proxy":
         print(f"[cyan]ChatGPT connector URL:[/cyan] {public_base_url}/mcp")
