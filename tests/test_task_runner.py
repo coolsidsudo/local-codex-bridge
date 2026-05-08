@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -72,6 +73,22 @@ def read_task_record(task_dir: Path, task_id: str) -> tuple[str, dict[str, objec
     prompt = (task_path / "prompt.md").read_text(encoding="utf-8")
     meta = json.loads((task_path / "meta.json").read_text(encoding="utf-8"))
     return prompt, meta
+
+
+def write_task_record(
+    task_dir: Path,
+    task_id: str,
+    meta: dict[str, object],
+    stdout: str = "",
+    stderr: str = "",
+) -> Path:
+    task_path = task_dir / task_id
+    task_path.mkdir(parents=True)
+    (task_path / "prompt.md").write_text("Historical task\n", encoding="utf-8")
+    (task_path / "stdout.jsonl").write_text(stdout, encoding="utf-8")
+    (task_path / "stderr.log").write_text(stderr, encoding="utf-8")
+    (task_path / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    return task_path
 
 
 def test_run_verification_bundle_all_commands_passes_in_order(tmp_path: Path) -> None:
@@ -366,6 +383,9 @@ def test_get_task_refreshes_tracked_completed_process_from_running(tmp_path: Pat
     assert task["meta"]["returncode"] == returncode
     assert isinstance(task["meta"]["ended_at"], float)
     assert task["meta"]["ended_at"] >= task["meta"]["created_at"]
+    assert "status_diagnostic" not in task
+    assert "warnings" not in task
+    assert "status_diagnostic" not in task["meta"]
     _, meta_after = read_task_record(task_dir, result["task_id"])
     assert meta_after["status"] == "exited"
     assert meta_after["returncode"] == returncode
@@ -388,10 +408,115 @@ def test_list_tasks_refreshes_tracked_completed_process_from_running(tmp_path: P
     assert listed[0]["status"] == "exited"
     assert listed[0]["returncode"] == returncode
     assert isinstance(listed[0]["ended_at"], float)
+    assert "status_diagnostic" not in listed[0]
+    assert "warnings" not in listed[0]
     _, meta_after = read_task_record(task_dir, result["task_id"])
     assert meta_after["status"] == "exited"
     assert meta_after["returncode"] == returncode
     assert meta_after["ended_at"] == listed[0]["ended_at"]
+
+
+def test_get_task_explains_unknown_status_for_historical_record_without_pid(
+    tmp_path: Path,
+) -> None:
+    runner, project, task_dir = make_runner(tmp_path)
+    task_id = "20260101-000000-legacy1"
+    write_task_record(
+        task_dir,
+        task_id,
+        {
+            "task_id": task_id,
+            "project_id": "demo",
+            "project_path": str(project),
+            "status": "running",
+            "created_at": 1.0,
+        },
+        stdout='{"msg": "partial output"}\n',
+        stderr="partial stderr\n",
+    )
+
+    task = runner.get_task(task_id)
+
+    assert task["status"] == "unknown"
+    assert task["meta"]["status"] == "unknown"
+    assert task["status_diagnostic"]["code"] == "legacy_missing_process_metadata"
+    assert task["meta"]["status_diagnostic"] == task["status_diagnostic"]
+    assert "lacks reliable process metadata" in task["status_diagnostic"]["message"]
+    assert "older/pre-v0.3.4" in task["status_diagnostic"]["meaning"]
+    assert any("Task status is unknown" in warning for warning in task["warnings"])
+    assert task["meta"]["warnings"] == task["warnings"]
+    assert "partial output" in task["stdout_tail"]
+    assert "partial stderr" in task["stderr_tail"]
+
+    _, persisted_meta = read_task_record(task_dir, task_id)
+    assert persisted_meta["status"] == "unknown"
+    assert "status_diagnostic" not in persisted_meta
+    assert "warnings" not in persisted_meta
+
+
+def test_list_tasks_explains_unknown_status_for_historical_record_without_pid(
+    tmp_path: Path,
+) -> None:
+    runner, project, task_dir = make_runner(tmp_path)
+    task_id = "20260101-000000-legacy2"
+    write_task_record(
+        task_dir,
+        task_id,
+        {
+            "task_id": task_id,
+            "project_id": "demo",
+            "project_path": str(project),
+            "status": "running",
+            "created_at": 1.0,
+        },
+    )
+
+    listed = runner.list_tasks()
+
+    assert listed[0]["task_id"] == task_id
+    assert listed[0]["status"] == "unknown"
+    assert listed[0]["status_diagnostic"]["code"] == "legacy_missing_process_metadata"
+    assert "lacks reliable process metadata" in listed[0]["status_diagnostic"]["message"]
+    assert "older/pre-v0.3.4" in listed[0]["status_diagnostic"]["meaning"]
+    assert any("Task status is unknown" in warning for warning in listed[0]["warnings"])
+
+    _, persisted_meta = read_task_record(task_dir, task_id)
+    assert persisted_meta["status"] == "unknown"
+    assert "status_diagnostic" not in persisted_meta
+    assert "warnings" not in persisted_meta
+
+
+def test_live_pid_based_running_record_does_not_receive_unknown_diagnostics(
+    tmp_path: Path,
+) -> None:
+    runner, project, task_dir = make_runner(tmp_path)
+    task_id = "20260101-000000-livepid"
+    task_path = write_task_record(
+        task_dir,
+        task_id,
+        {
+            "task_id": task_id,
+            "project_id": "demo",
+            "project_path": str(project),
+            "status": "running",
+            "created_at": 1.0,
+        },
+    )
+    (task_path / "pid").write_text(str(os.getpid()), encoding="utf-8")
+
+    task = runner.get_task(task_id)
+    listed = runner.list_tasks()
+
+    assert task["status"] == "running"
+    assert task["meta"]["status"] == "running"
+    assert "status_diagnostic" not in task
+    assert "warnings" not in task
+    assert "status_diagnostic" not in task["meta"]
+    assert "warnings" not in task["meta"]
+    assert listed[0]["task_id"] == task_id
+    assert listed[0]["status"] == "running"
+    assert "status_diagnostic" not in listed[0]
+    assert "warnings" not in listed[0]
 
 
 def test_start_codex_task_dry_run_without_review_contract_keeps_prompt(

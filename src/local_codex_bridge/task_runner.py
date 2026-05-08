@@ -90,6 +90,11 @@ CODEX_REMEDIATION_HINT = (
     "Install the Codex CLI, ensure it is on the bridge process PATH, or set "
     "server.codex_bin, projects.<id>.codex_bin, or LCB_CODEX_BIN to an executable path."
 )
+UNKNOWN_TASK_STATUS_WARNING = (
+    "Task status is unknown because this record lacks reliable process metadata; "
+    "this can happen for older or incomplete task records. Inspect stdout/stderr "
+    "for available evidence or rerun the task if needed."
+)
 
 
 def _apply_review_contract(prompt: str) -> tuple[str, bool]:
@@ -339,17 +344,22 @@ class TaskRunner:
         rec = self._task_record(task_id)
         meta = json.loads(rec.meta_path.read_text(encoding="utf-8"))
         meta = self._refresh_running_task_meta(rec, meta)
-        status = meta["status"]
+        output_meta = self._task_meta_with_status_diagnostics_for_output(rec, meta)
+        status = output_meta["status"]
 
         stdout = self._tail_text(rec.stdout_path, max_chars)
         stderr = self._tail_text(rec.stderr_path, max_chars)
-        return {
+        result = {
             "task_id": task_id,
             "status": status,
-            "meta": meta,
+            "meta": output_meta,
             "stdout_tail": stdout,
             "stderr_tail": stderr,
         }
+        if "status_diagnostic" in output_meta:
+            result["status_diagnostic"] = output_meta["status_diagnostic"]
+            result["warnings"] = output_meta["warnings"]
+        return result
 
     def abort_task(self, task_id: str) -> dict[str, Any]:
         rec = self._task_record(task_id)
@@ -3318,20 +3328,20 @@ class TaskRunner:
             if meta_path.exists():
                 try:
                     meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                    rec = TaskRecord(
+                        task_id=str(meta.get("task_id", task_dir.name)),
+                        project_id=str(meta.get("project_id", "")),
+                        project_path=Path(str(meta.get("project_path", ""))),
+                        task_path=task_dir,
+                        prompt_path=task_dir / "prompt.md",
+                        stdout_path=task_dir / "stdout.jsonl",
+                        stderr_path=task_dir / "stderr.log",
+                        meta_path=meta_path,
+                        pid_path=task_dir / "pid",
+                    )
                     if meta.get("status") == "running":
-                        rec = TaskRecord(
-                            task_id=str(meta.get("task_id", task_dir.name)),
-                            project_id=str(meta.get("project_id", "")),
-                            project_path=Path(str(meta.get("project_path", ""))),
-                            task_path=task_dir,
-                            prompt_path=task_dir / "prompt.md",
-                            stdout_path=task_dir / "stdout.jsonl",
-                            stderr_path=task_dir / "stderr.log",
-                            meta_path=meta_path,
-                            pid_path=task_dir / "pid",
-                        )
                         meta = self._refresh_running_task_meta(rec, meta)
-                    items.append(meta)
+                    items.append(self._task_meta_with_status_diagnostics_for_output(rec, meta))
                 except Exception as exc:  # noqa: BLE001
                     items.append({"task_id": task_dir.name, "error": str(exc)})
         return items
@@ -5080,6 +5090,42 @@ class TaskRunner:
         if meta_status in {"dry_run", "failed_to_start"}:
             return meta_status
         return pid_status
+
+    def _task_meta_with_status_diagnostics_for_output(
+        self,
+        rec: TaskRecord,
+        meta: dict[str, Any],
+    ) -> dict[str, Any]:
+        output = dict(meta)
+        if output.get("status") != "unknown":
+            return output
+        if output.get("returncode") is not None or output.get("ended_at") is not None:
+            return output
+        if rec.task_id in self._task_processes:
+            return output
+
+        diagnostic = {
+            "code": "legacy_missing_process_metadata",
+            "message": (
+                "Local Codex Bridge cannot safely infer whether this task is running "
+                "or exited because the task record lacks reliable process metadata."
+            ),
+            "meaning": (
+                "The unknown status is conservative and can occur for older/pre-v0.3.4 "
+                "or incomplete task records; inspect stdout/stderr for available "
+                "evidence or rerun the task if needed."
+            ),
+        }
+        warnings = output.get("warnings")
+        if isinstance(warnings, list):
+            output_warnings = list(warnings)
+        else:
+            output_warnings = []
+        if UNKNOWN_TASK_STATUS_WARNING not in output_warnings:
+            output_warnings.append(UNKNOWN_TASK_STATUS_WARNING)
+        output["status_diagnostic"] = diagnostic
+        output["warnings"] = output_warnings
+        return output
 
     def _refresh_running_task_meta(
         self,
