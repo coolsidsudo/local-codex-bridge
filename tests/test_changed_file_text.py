@@ -45,13 +45,22 @@ def test_unstaged_worktree_text_is_targeted(tmp_path: Path) -> None:
     (repo / "tracked.txt").write_text("initial\nunstaged change\n", encoding="utf-8")
     (repo / "other.txt").write_text("other unchanged secret\nunrequested\n", encoding="utf-8")
 
-    result = runner.get_changed_file_text("dummy", "tracked.txt", source="worktree")
+    worktree = runner.get_changed_file_text("dummy", "tracked.txt", source="worktree")
+    unstaged = runner.get_changed_file_text("dummy", "tracked.txt", source="unstaged")
 
-    assert result["status"] == "ok"
-    assert result["source_resolved"] == "worktree"
-    assert result["content"]["text"] == "initial\nunstaged change\n"
-    assert "unrequested" not in result["content"]["text"]
-    assert result["limits"]["changed_file_only"] is True
+    assert worktree["status"] == "ok"
+    assert worktree["source_requested"] == "worktree"
+    assert worktree["source_resolved"] == "worktree"
+    assert worktree["content"]["text"] == "initial\nunstaged change\n"
+    assert "unrequested" not in worktree["content"]["text"]
+    assert worktree["limits"]["changed_file_only"] is True
+
+    assert unstaged["status"] == "ok"
+    assert unstaged["source_requested"] == "unstaged"
+    assert unstaged["source_resolved"] == "worktree"
+    assert unstaged["content"]["text"] == "initial\nunstaged change\n"
+    assert "unrequested" not in unstaged["content"]["text"]
+    assert unstaged["limits"]["changed_file_only"] is True
 
 
 def test_staged_text_reads_index_content(tmp_path: Path) -> None:
@@ -187,6 +196,16 @@ def test_path_refusals(tmp_path: Path, path: str) -> None:
     result = runner.get_changed_file_text("dummy", path)
 
     assert result["status"] == "blocked_input"
+
+
+def test_invalid_source_refusal(tmp_path: Path) -> None:
+    runner, _ = make_runner(tmp_path)
+
+    result = runner.get_changed_file_text("dummy", "tracked.txt", source="invalid")
+
+    assert result["status"] == "blocked_input"
+    assert result["error"] == "source must be one of auto, worktree, unstaged, staged, untracked"
+    assert result["allowed_sources"] == ["auto", "staged", "unstaged", "untracked", "worktree"]
 
 
 def test_clean_unchanged_path_refusal(tmp_path: Path) -> None:
