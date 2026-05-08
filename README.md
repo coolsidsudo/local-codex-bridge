@@ -493,6 +493,12 @@ Try a new chat after connecting the app. Then select the connector from the `+` 
 
 If ChatGPT reports `FORBIDDEN: This conversation does not support developer MCPs`, treat it as platform/conversation gating. Try a supported ChatGPT surface/conversation with developer MCP access; bridge code cannot guarantee a fix for that platform gate.
 
+### Long verification commands time out
+
+`run_verification` and `run_verification_bundle` have an LCB-local subprocess timeout. If that timeout is reached, LCB reports a structured timeout result when the MCP/tool call stays alive long enough to deliver it. This is separate from ChatGPT/MCP platform response limits; long assistant/tool turns may still fail before the bridge result is displayed.
+
+For long full-suite commands such as `python3 -m pytest`, consider increasing the verification timeout, running the command directly in Terminal, or splitting verification into smaller allowlisted keys for interactive MCP checks. ChatGPT errors such as `FORBIDDEN` or “Something went wrong” should be treated as platform/conversation issues unless repository evidence shows an LCB-side bug.
+
 ### `gpt-5.5` requires a newer Codex version
 
 Upgrade Codex CLI and retry.
