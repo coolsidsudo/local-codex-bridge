@@ -116,6 +116,7 @@ class TaskRecord:
 class TaskRunner:
     def __init__(self, config: BridgeConfig):
         self.config = config
+        self._task_processes: dict[str, subprocess.Popen[Any]] = {}
 
     def _project(self, project_id: str) -> ProjectConfig:
         if project_id not in self.config.projects:
@@ -330,15 +331,15 @@ class TaskRunner:
         stdout.close()
         stderr.close()
         prompt_stdin.close()
+        self._task_processes[task_id] = proc
         rec.pid_path.write_text(str(proc.pid), encoding="utf-8")
         return {"task_id": task_id, "status": "running", "pid": proc.pid, "cmd": cmd}
 
     def get_task(self, task_id: str, max_chars: int = 20000) -> dict[str, Any]:
         rec = self._task_record(task_id)
         meta = json.loads(rec.meta_path.read_text(encoding="utf-8"))
-        status = self._current_task_status(meta, rec.pid_path)
-        meta["status"] = status
-        rec.meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+        meta = self._refresh_running_task_meta(rec, meta)
+        status = meta["status"]
 
         stdout = self._tail_text(rec.stdout_path, max_chars)
         stderr = self._tail_text(rec.stderr_path, max_chars)
@@ -3290,7 +3291,19 @@ class TaskRunner:
             if meta_path.exists():
                 try:
                     meta = json.loads(meta_path.read_text(encoding="utf-8"))
-                    meta["status"] = self._current_task_status(meta, task_dir / "pid")
+                    if meta.get("status") == "running":
+                        rec = TaskRecord(
+                            task_id=str(meta.get("task_id", task_dir.name)),
+                            project_id=str(meta.get("project_id", "")),
+                            project_path=Path(str(meta.get("project_path", ""))),
+                            task_path=task_dir,
+                            prompt_path=task_dir / "prompt.md",
+                            stdout_path=task_dir / "stdout.jsonl",
+                            stderr_path=task_dir / "stderr.log",
+                            meta_path=meta_path,
+                            pid_path=task_dir / "pid",
+                        )
+                        meta = self._refresh_running_task_meta(rec, meta)
                     items.append(meta)
                 except Exception as exc:  # noqa: BLE001
                     items.append({"task_id": task_dir.name, "error": str(exc)})
@@ -5039,6 +5052,34 @@ class TaskRunner:
         if meta_status in {"dry_run", "failed_to_start"}:
             return meta_status
         return pid_status
+
+    def _refresh_running_task_meta(
+        self,
+        rec: TaskRecord,
+        meta: dict[str, Any],
+    ) -> dict[str, Any]:
+        if meta.get("status") != "running":
+            return meta
+
+        proc = self._task_processes.get(rec.task_id)
+        if proc is not None:
+            returncode = proc.poll()
+            if returncode is not None:
+                meta.update(
+                    {
+                        "status": "exited",
+                        "ended_at": time.time(),
+                        "returncode": returncode,
+                    }
+                )
+                rec.meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+                return meta
+
+        status = self._current_task_status(meta, rec.pid_path)
+        if status != meta["status"]:
+            meta["status"] = status
+            rec.meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+        return meta
 
     def _status_from_pid_path(self, pid_path: Path) -> str:
         if not pid_path.exists():

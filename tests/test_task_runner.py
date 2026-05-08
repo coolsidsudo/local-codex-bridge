@@ -349,6 +349,51 @@ def test_codex_bin_env_is_used_when_global_bin_is_default(
     assert result["cmd"] == ["/custom/codex", "exec", "-m", "gpt-5.5", "--json"]
 
 
+def test_get_task_refreshes_tracked_completed_process_from_running(tmp_path: Path) -> None:
+    runner, _, task_dir = make_runner(tmp_path)
+    runner.config.server.codex_bin = sys.executable
+
+    result = runner.start_codex_task("demo", "Implement the thing.\n")
+    proc = runner._task_processes[result["task_id"]]
+    returncode = proc.wait(timeout=5)
+    _, meta_before = read_task_record(task_dir, result["task_id"])
+    assert meta_before["status"] == "running"
+
+    task = runner.get_task(result["task_id"])
+
+    assert task["status"] == "exited"
+    assert task["meta"]["status"] == "exited"
+    assert task["meta"]["returncode"] == returncode
+    assert isinstance(task["meta"]["ended_at"], float)
+    assert task["meta"]["ended_at"] >= task["meta"]["created_at"]
+    _, meta_after = read_task_record(task_dir, result["task_id"])
+    assert meta_after["status"] == "exited"
+    assert meta_after["returncode"] == returncode
+    assert meta_after["ended_at"] == task["meta"]["ended_at"]
+
+
+def test_list_tasks_refreshes_tracked_completed_process_from_running(tmp_path: Path) -> None:
+    runner, _, task_dir = make_runner(tmp_path)
+    runner.config.server.codex_bin = sys.executable
+
+    result = runner.start_codex_task("demo", "Implement the thing.\n")
+    proc = runner._task_processes[result["task_id"]]
+    returncode = proc.wait(timeout=5)
+    _, meta_before = read_task_record(task_dir, result["task_id"])
+    assert meta_before["status"] == "running"
+
+    listed = runner.list_tasks()
+
+    assert listed[0]["task_id"] == result["task_id"]
+    assert listed[0]["status"] == "exited"
+    assert listed[0]["returncode"] == returncode
+    assert isinstance(listed[0]["ended_at"], float)
+    _, meta_after = read_task_record(task_dir, result["task_id"])
+    assert meta_after["status"] == "exited"
+    assert meta_after["returncode"] == returncode
+    assert meta_after["ended_at"] == listed[0]["ended_at"]
+
+
 def test_start_codex_task_dry_run_without_review_contract_keeps_prompt(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
