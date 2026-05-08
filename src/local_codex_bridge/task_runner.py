@@ -1928,6 +1928,7 @@ class TaskRunner:
                 pr=prs["prs"][0],
                 local=local,
                 target_branch=None,
+                suppress_merged_open_pr_blockers=True,
             )
             evidence["pr_readiness"] = pr_readiness
             return {"status": "ok", "pr": prs["prs"][0], **evidence}
@@ -1950,6 +1951,7 @@ class TaskRunner:
             pr=canonical["pr"],
             local=local,
             target_branch=None,
+            suppress_merged_open_pr_blockers=True,
         )
         evidence["pr_readiness"] = pr_readiness
         return {"status": "ok", "pr": canonical["pr"], **evidence}
@@ -2286,6 +2288,7 @@ class TaskRunner:
             pr_url_or_number=pr_url_or_number,
             target_branch=target,
             local=local,
+            suppress_merged_open_pr_blockers=True,
         )
         sync_readiness = self._build_local_sync_readiness(
             repo=repo,
@@ -2792,6 +2795,9 @@ class TaskRunner:
             "merge_state_status": None,
             "review_decision": None,
             "check_summary": {"status": "unknown", "total": 0},
+            "merge_readiness_applicable": None,
+            "pr_lifecycle_state": None,
+            "post_merge_note": None,
             "local_current_branch": None,
             "local_head": None,
             "detached": None,
@@ -2899,6 +2905,7 @@ class TaskRunner:
         pr: dict[str, Any],
         local: dict[str, Any],
         target_branch: str | None,
+        suppress_merged_open_pr_blockers: bool = False,
     ) -> dict[str, Any]:
         check_summary = self._summarize_status_check_rollup(pr.get("statusCheckRollup"))
         state = pr.get("state")
@@ -2933,11 +2940,29 @@ class TaskRunner:
                 "merge_state_status": merge_state_status,
                 "review_decision": review_decision,
                 "check_summary": check_summary,
+                "merge_readiness_applicable": True,
+                "pr_lifecycle_state": state.lower() if isinstance(state, str) else None,
+                "post_merge_note": None,
                 "local_branch_matches_pr_head": local_branch_matches,
                 "local_head_matches_pr_head_sha": local_head_matches,
                 "pr": pr,
             }
         )
+
+        if state == "MERGED" and suppress_merged_open_pr_blockers:
+            readiness.update(
+                {
+                    "ready_to_consider_merge": False,
+                    "merge_readiness_applicable": False,
+                    "pr_lifecycle_state": "merged",
+                    "post_merge_note": (
+                        "PR is already merged; merge readiness checks are not applicable. "
+                        "Use local target sync readiness instead."
+                    ),
+                }
+            )
+            readiness["warnings"].append(readiness["post_merge_note"])
+            return readiness
 
         if state != "OPEN":
             readiness["blocking_reasons"].append("PR is not open")
@@ -2977,6 +3002,7 @@ class TaskRunner:
         pr_url_or_number: str | int | None,
         target_branch: str,
         local: dict[str, Any],
+        suppress_merged_open_pr_blockers: bool = False,
     ) -> dict[str, Any]:
         readiness = self._initial_pr_readiness_from_local(local)
         if readiness["blocking_reasons"]:
@@ -3039,6 +3065,7 @@ class TaskRunner:
             pr=pr_result["pr"],
             local=local,
             target_branch=target_branch,
+            suppress_merged_open_pr_blockers=suppress_merged_open_pr_blockers,
         )
 
     def _summarize_status_check_rollup(self, rollup: Any) -> dict[str, Any]:

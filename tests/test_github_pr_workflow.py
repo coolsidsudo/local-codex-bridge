@@ -583,6 +583,70 @@ def test_pr_status_readiness_missing_review_decision_not_ready_with_warning(
     assert any("review-decision evidence" in warning for warning in readiness["warnings"])
 
 
+def test_pr_status_readiness_merged_pr_suppresses_open_pr_merge_blockers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner, repo, _ = make_runner(tmp_path, monkeypatch)
+    set_ready_pr_env(monkeypatch, repo)
+    monkeypatch.setenv("LCB_FAKE_GH_PR_STATE", "MERGED")
+    monkeypatch.setenv("LCB_FAKE_GH_PR_DRAFT", "1")
+    monkeypatch.setenv("LCB_FAKE_GH_MERGEABLE", "UNKNOWN")
+    monkeypatch.setenv("LCB_FAKE_GH_MERGE_STATE", "BLOCKED")
+    monkeypatch.setenv("LCB_FAKE_GH_REVIEW_DECISION", "")
+    monkeypatch.setenv("LCB_FAKE_GH_CHECKS", "missing")
+    monkeypatch.setenv("LCB_FAKE_GH_HEAD_BRANCH", "other")
+    monkeypatch.setenv("LCB_FAKE_GH_HEAD_SHA", "0" * 40)
+
+    result = runner.github_get_pr_status("dummy", 123)
+
+    readiness = result["pr_readiness"]
+    assert result["status"] == "ok"
+    assert readiness["status"] == "ok"
+    assert readiness["ready_to_consider_merge"] is False
+    assert readiness["merge_readiness_applicable"] is False
+    assert readiness["pr_lifecycle_state"] == "merged"
+    assert readiness["post_merge_note"] == (
+        "PR is already merged; merge readiness checks are not applicable. "
+        "Use local target sync readiness instead."
+    )
+    assert readiness["state"] == "MERGED"
+    assert readiness["number"] == 123
+    assert readiness["url"] == "https://github.com/coolsidsudo/local-codex-bridge/pull/123"
+    assert readiness["check_summary"]["status"] == "missing"
+    assert readiness["local_branch_matches_pr_head"] is False
+    assert readiness["local_head_matches_pr_head_sha"] is False
+    assert readiness["blocking_reasons"] == []
+    assert readiness["post_merge_note"] in readiness["warnings"]
+
+
+def test_pr_status_readiness_open_pr_conservative_blockers_remain_unchanged(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner, repo, _ = make_runner(tmp_path, monkeypatch)
+    set_ready_pr_env(monkeypatch, repo)
+    monkeypatch.setenv("LCB_FAKE_GH_MERGEABLE", "UNKNOWN")
+    monkeypatch.setenv("LCB_FAKE_GH_MERGE_STATE", "BLOCKED")
+    monkeypatch.setenv("LCB_FAKE_GH_REVIEW_DECISION", "")
+    monkeypatch.setenv("LCB_FAKE_GH_CHECKS", "missing")
+    monkeypatch.setenv("LCB_FAKE_GH_HEAD_BRANCH", "other")
+    monkeypatch.setenv("LCB_FAKE_GH_HEAD_SHA", "0" * 40)
+
+    result = runner.github_get_pr_status("dummy", 123)
+
+    blockers = result["pr_readiness"]["blocking_reasons"]
+    assert result["pr_readiness"]["state"] == "OPEN"
+    assert result["pr_readiness"]["ready_to_consider_merge"] is False
+    assert result["pr_readiness"]["merge_readiness_applicable"] is True
+    assert "PR mergeability is not confirmed mergeable" in blockers
+    assert "PR merge state is not clean" in blockers
+    assert "PR checks are not confirmed passing" in blockers
+    assert "PR review decision is missing or unknown" in blockers
+    assert "Local current branch does not match PR head branch" in blockers
+    assert "Local HEAD does not match PR head SHA" in blockers
+
+
 def test_pr_status_readiness_dirty_worktree_not_ready(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -722,6 +786,7 @@ def test_github_merge_pr_invalid_inputs_block_before_merge(
     ("env_name", "env_value"),
     [
         ("LCB_FAKE_GH_PR_STATE", "CLOSED"),
+        ("LCB_FAKE_GH_PR_STATE", "MERGED"),
         ("LCB_FAKE_GH_PR_DRAFT", "1"),
         ("LCB_FAKE_GH_HEAD_SHA", "__NULL__"),
         ("LCB_FAKE_GH_HEAD_SHA", "abc123"),
@@ -983,6 +1048,35 @@ def test_pr_sync_readiness_missing_or_unknown_checks_not_ready_with_warning(
     assert result["pr_readiness"]["check_summary"]["status"] == checks
     assert result["pr_readiness"]["ready_to_consider_merge"] is False
     assert any("check evidence" in warning for warning in result["pr_readiness"]["warnings"])
+
+
+def test_pr_sync_readiness_merged_pr_can_be_sync_ready_without_merge_blocker_noise(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner, repo, _ = make_runner(tmp_path, monkeypatch)
+    set_ready_pr_env(monkeypatch, repo)
+    run(repo, ["git", "update-ref", "refs/remotes/origin/main", head(repo, "main")])
+    monkeypatch.setenv("LCB_FAKE_GH_PR_STATE", "MERGED")
+    monkeypatch.setenv("LCB_FAKE_GH_MERGEABLE", "UNKNOWN")
+    monkeypatch.setenv("LCB_FAKE_GH_MERGE_STATE", "BLOCKED")
+    monkeypatch.setenv("LCB_FAKE_GH_REVIEW_DECISION", "")
+    monkeypatch.setenv("LCB_FAKE_GH_HEAD_BRANCH", "other")
+    monkeypatch.setenv("LCB_FAKE_GH_HEAD_SHA", "0" * 40)
+
+    result = runner.get_pr_sync_readiness("dummy", 123, target_branch="main")
+
+    blockers = result["pr_readiness"]["blocking_reasons"]
+    assert result["status"] == "ok"
+    assert result["ready_to_consider_merge"] is False
+    assert result["ready_to_sync_local_target"] is True
+    assert result["pr_readiness"]["ready_to_consider_merge"] is False
+    assert result["pr_readiness"]["merge_readiness_applicable"] is False
+    assert result["pr_readiness"]["pr_lifecycle_state"] == "merged"
+    assert result["pr_readiness"]["post_merge_note"] in result["pr_readiness"]["warnings"]
+    assert result["local_sync_readiness"]["ready_to_sync_local_target"] is True
+    assert result["local_sync_readiness"]["relation"] == "equal"
+    assert blockers == []
 
 
 def test_pr_sync_readiness_dirty_worktree_blocks_pr_and_sync(
