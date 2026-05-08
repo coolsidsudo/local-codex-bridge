@@ -1374,26 +1374,13 @@ class TaskRunner:
     ) -> dict[str, Any]:
         project = self._project(project_id)
         cmd = self._resolve_verification_command(project, command_key)
-        result = self._run(
+        return self._run_verification_command(
             project.path,
+            command_key,
             cmd,
             timeout=timeout,
             max_chars=VERIFICATION_OUTPUT_MAX_CHARS,
         )
-        result["command_key"] = command_key
-        result["status"] = "passed" if result["returncode"] == 0 else "failed"
-        if result["returncode"] == 127:
-            result["reason"] = "executable not found"
-        elif result["returncode"] != 0:
-            result["reason"] = "nonzero exit status"
-            if not result.get("stderr"):
-                result["hint"] = (
-                    "Command exited nonzero without stderr; run directly or make the script "
-                    "print failing checks."
-                )
-        else:
-            result["reason"] = None
-        return result
 
     def run_verification_bundle(
         self,
@@ -1464,11 +1451,14 @@ class TaskRunner:
                             "elapsed_seconds": 0.0,
                             "status": "not_run",
                             "reason": "not run because stop_on_fail halted after a failed command",
+                            "timed_out": False,
+                            "timeout_seconds": timeout_per_command,
+                            "failure_kind": None,
                         }
                     )
                     continue
 
-                result = self._run_verification_bundle_command(
+                result = self._run_verification_command(
                     project.path,
                     command_key,
                     cmd,
@@ -1507,6 +1497,7 @@ class TaskRunner:
             "timeout_per_command": timeout_per_command,
             "stop_on_fail": stop_on_fail,
             "elapsed_seconds": round(time.monotonic() - started_at, 3),
+            "timed_out": any(result.get("timed_out") is True for result in results),
             "summary": summary,
             "results": results,
         }
@@ -5286,7 +5277,7 @@ class TaskRunner:
             )
         return project.verification[command_key]
 
-    def _run_verification_bundle_command(
+    def _run_verification_command(
         self,
         cwd: Path,
         command_key: str,
@@ -5295,7 +5286,9 @@ class TaskRunner:
         max_chars: int,
     ) -> dict[str, Any]:
         started_at = time.monotonic()
-        reason = None
+        reason: str | None = None
+        timed_out = False
+        failure_kind: str | None = None
         try:
             proc = subprocess.run(
                 cmd,
@@ -5311,16 +5304,20 @@ class TaskRunner:
             stderr_value: str | bytes | None = proc.stderr
             if returncode != 0:
                 reason = "nonzero exit status"
+                failure_kind = "nonzero"
         except FileNotFoundError as exc:
             returncode = 127
             stdout_value = ""
             stderr_value = str(exc)
             reason = "executable not found"
+            failure_kind = "missing_executable"
         except subprocess.TimeoutExpired as exc:
             returncode = None
             stdout_value = exc.stdout
             stderr_value = exc.stderr
             reason = f"timed out after {timeout} seconds"
+            timed_out = True
+            failure_kind = "timeout"
 
         stdout, stdout_truncated, stdout_omitted_chars = self._bounded_verification_output(
             stdout_value,
@@ -5330,7 +5327,7 @@ class TaskRunner:
             stderr_value,
             max_chars,
         )
-        return {
+        result = {
             "command_key": command_key,
             "cmd": cmd,
             "returncode": returncode,
@@ -5343,7 +5340,28 @@ class TaskRunner:
             "elapsed_seconds": round(time.monotonic() - started_at, 3),
             "status": "passed" if returncode == 0 else "failed",
             "reason": reason,
+            "timed_out": timed_out,
+            "timeout_seconds": timeout,
+            "failure_kind": failure_kind,
         }
+        if timed_out:
+            result["diagnostic"] = (
+                "The verification command exceeded Local Codex Bridge's local timeout. "
+                "This is not the same as a test failure. Python timeout handling terminated "
+                "the direct subprocess; descendant processes spawned by the command may need "
+                "separate cleanup if the command detached them."
+            )
+            result["suggested_next_steps"] = [
+                "Retry with a larger timeout if appropriate.",
+                "Run long full-suite verification directly in Terminal if the MCP/tool call may exceed platform limits.",
+                "Prefer smaller allowlisted verification keys for interactive MCP checks.",
+            ]
+        elif returncode != 0 and not stderr:
+            result["hint"] = (
+                "Command exited nonzero without stderr; run directly or make the script "
+                "print failing checks."
+            )
+        return result
 
     def _bounded_verification_output(
         self,

@@ -60,6 +60,17 @@ def make_verification_runner(tmp_path: Path) -> tuple[TaskRunner, Path]:
                         "import sys; print('o' * 40005); print('e' * 40006, file=sys.stderr)",
                     ],
                     "timeout": [sys.executable, "-c", "import time; time.sleep(2)"],
+                    "timeout_output": [
+                        sys.executable,
+                        "-u",
+                        "-c",
+                        (
+                            "import sys, time; "
+                            "print('o' * 40005, flush=True); "
+                            "print('e' * 40006, file=sys.stderr, flush=True); "
+                            "time.sleep(2)"
+                        ),
+                    ],
                     "missing_executable": ["definitely-missing-lcb-executable"],
                 },
             )
@@ -236,6 +247,45 @@ def test_run_verification_bundle_bounds_output_and_reports_truncation(tmp_path: 
     assert len(item["stderr"]) == 40000
 
 
+def test_run_verification_timeout_returns_structured_result(tmp_path: Path) -> None:
+    runner, _ = make_verification_runner(tmp_path)
+
+    result = runner.run_verification("demo", "timeout", timeout=1)
+
+    assert result["status"] == "failed"
+    assert result["command_key"] == "timeout"
+    assert result["returncode"] is None
+    assert result["reason"] == "timed out after 1 seconds"
+    assert result["timed_out"] is True
+    assert result["timeout_seconds"] == 1
+    assert isinstance(result["elapsed_seconds"], float)
+    assert result["elapsed_seconds"] >= 1
+    assert result["failure_kind"] == "timeout"
+    assert "Local Codex Bridge's local timeout" in result["diagnostic"]
+    assert "not the same as a test failure" in result["diagnostic"]
+    assert "direct subprocess" in result["diagnostic"]
+    assert isinstance(result["suggested_next_steps"], list)
+    assert "Retry with a larger timeout if appropriate." in result["suggested_next_steps"]
+
+
+def test_run_verification_timeout_includes_bounded_output_and_guidance(tmp_path: Path) -> None:
+    runner, _ = make_verification_runner(tmp_path)
+
+    result = runner.run_verification("demo", "timeout_output", timeout=1)
+
+    assert result["status"] == "failed"
+    assert result["timed_out"] is True
+    assert result["failure_kind"] == "timeout"
+    assert len(result["stdout"]) == 40000
+    assert len(result["stderr"]) == 40000
+    assert result["stdout_truncated"] is True
+    assert result["stderr_truncated"] is True
+    assert result["stdout_omitted_chars"] > 0
+    assert result["stderr_omitted_chars"] > 0
+    assert any("Terminal" in step for step in result["suggested_next_steps"])
+    assert any("smaller allowlisted" in step for step in result["suggested_next_steps"])
+
+
 def test_run_verification_bundle_timeout_returns_failure_evidence(tmp_path: Path) -> None:
     runner, _ = make_verification_runner(tmp_path)
 
@@ -243,10 +293,64 @@ def test_run_verification_bundle_timeout_returns_failure_evidence(tmp_path: Path
 
     item = result["results"][0]
     assert result["status"] == "failed_verification"
+    assert result["timed_out"] is True
     assert result["summary"] == {"passed": 0, "failed": 1, "not_run": 0}
     assert item["status"] == "failed"
     assert item["returncode"] is None
     assert item["reason"] == "timed out after 1 seconds"
+    assert item["timed_out"] is True
+    assert item["timeout_seconds"] == 1
+    assert item["failure_kind"] == "timeout"
+    assert "not the same as a test failure" in item["diagnostic"]
+    assert isinstance(item["suggested_next_steps"], list)
+
+
+def test_run_verification_bundle_timeout_stop_on_fail_marks_remaining_not_run(
+    tmp_path: Path,
+) -> None:
+    runner, _ = make_verification_runner(tmp_path)
+
+    result = runner.run_verification_bundle(
+        "demo",
+        ["pass_one", "timeout", "pass_two"],
+        timeout_per_command=1,
+        stop_on_fail=True,
+    )
+
+    assert result["status"] == "failed_verification"
+    assert result["timed_out"] is True
+    assert result["summary"] == {"passed": 1, "failed": 1, "not_run": 1}
+    assert [item["status"] for item in result["results"]] == ["passed", "failed", "not_run"]
+    assert result["results"][0]["stdout"].strip() == "pass one"
+    assert result["results"][1]["timed_out"] is True
+    assert result["results"][1]["failure_kind"] == "timeout"
+    assert result["results"][2]["command_key"] == "pass_two"
+    assert result["results"][2]["timed_out"] is False
+    assert result["results"][2]["returncode"] is None
+    assert result["results"][2]["reason"].startswith("not run because stop_on_fail")
+
+
+def test_run_verification_bundle_timeout_continues_when_stop_on_fail_false(
+    tmp_path: Path,
+) -> None:
+    runner, _ = make_verification_runner(tmp_path)
+
+    result = runner.run_verification_bundle(
+        "demo",
+        ["pass_one", "timeout", "pass_two"],
+        timeout_per_command=1,
+        stop_on_fail=False,
+    )
+
+    assert result["status"] == "failed_verification"
+    assert result["timed_out"] is True
+    assert result["summary"] == {"passed": 2, "failed": 1, "not_run": 0}
+    assert [item["status"] for item in result["results"]] == ["passed", "failed", "passed"]
+    assert result["results"][0]["stdout"].strip() == "pass one"
+    assert result["results"][1]["timed_out"] is True
+    assert result["results"][1]["failure_kind"] == "timeout"
+    assert result["results"][2]["stdout"].strip() == "pass two"
+    assert result["results"][2]["timed_out"] is False
 
 
 def test_run_verification_bundle_missing_executable_returns_failure_evidence(
