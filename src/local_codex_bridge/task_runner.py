@@ -3854,11 +3854,11 @@ class TaskRunner:
     def _validate_changed_file_text_source(self, source: str) -> dict[str, Any]:
         if not isinstance(source, str):
             return {"status": "blocked_input", "error": "source must be a string"}
-        allowed = {"auto", "worktree", "staged", "untracked"}
+        allowed = {"auto", "worktree", "unstaged", "staged", "untracked"}
         if source not in allowed:
             return {
                 "status": "blocked_input",
-                "error": "source must be one of auto, worktree, staged, untracked",
+                "error": "source must be one of auto, worktree, unstaged, staged, untracked",
                 "allowed_sources": sorted(allowed),
             }
         return {"status": "ok", "source": source}
@@ -4163,13 +4163,14 @@ class TaskRunner:
             }
 
         if source != "auto":
-            if source not in available_sources:
+            source_resolved = "worktree" if source == "unstaged" else source
+            if source_resolved not in available_sources:
                 return {
                     "status": "blocked_unchanged",
                     "error": f"path has no {source} content source",
                     "available_sources": available_sources,
                 }
-            return {"status": "ok", "source": source, "available_sources": available_sources}
+            return {"status": "ok", "source": source_resolved, "available_sources": available_sources}
 
         if file_item["untracked"]:
             return {"status": "ok", "source": "untracked", "available_sources": available_sources}
