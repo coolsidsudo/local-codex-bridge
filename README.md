@@ -499,6 +499,12 @@ If ChatGPT reports `FORBIDDEN: This conversation does not support developer MCPs
 
 For long full-suite commands such as `python3 -m pytest`, consider increasing the verification timeout, running the command directly in Terminal, or splitting verification into smaller allowlisted keys for interactive MCP checks. ChatGPT errors such as `FORBIDDEN` or “Something went wrong” should be treated as platform/conversation issues unless repository evidence shows an LCB-side bug.
 
+### Approval-card mutation calls report “Something went wrong”
+
+ChatGPT approval-card mediated mutation calls can fail at the platform/tool surface with “Something went wrong.” This does not necessarily mean LCB is unhealthy: read-only LCB calls, local verification, and local Codex tasks may still work, and lightweight no-op/safe mutations may succeed while heavier Git/GitHub mutations such as commit/push or merge fail in the ChatGPT surface.
+
+If an approval-card mutation failure occurs, treat the operation as ambiguous until verified. LCB writes local approval-card mutation diagnostics to `mutation_diagnostics.jsonl` in the configured `server.task_dir` (by default `~/.local-codex-bridge/tasks/mutation_diagnostics.jsonl`). Each JSONL entry has `event="approval_card_mutation"`, `phase` (`invoked`, `completed`, or `error`), `tool`, `project_id`, optional `task_id`, `outcome`, `status`, and `error_type`. If the ChatGPT approval-card failure has no corresponding local diagnostic event, the request likely did not reach LCB. If an `invoked`, `completed`, or `error` event exists, the request reached LCB and the recorded `outcome`/`status` should guide the next verification. Check repository and GitHub state with read-only LCB tools such as `get_project_status`, `get_review_package`, `github_get_pr_status`, or `run_verification`, or use Terminal/GitHub CLI. For commit, push, merge, tag, and release flows, Terminal fallback is appropriate when approval cards are unreliable. Do not frame the failure as definitely an LCB bug unless local diagnostics or LCB logs show the mutation request reached LCB and failed there.
+
 ### `gpt-5.5` requires a newer Codex version
 
 Upgrade Codex CLI and retry.

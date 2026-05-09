@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import functools
 import json
+import logging
 import os
+from datetime import datetime, timezone
 import posixpath
 import re
 import signal
@@ -15,6 +18,8 @@ from typing import Any
 
 from .config import BridgeConfig, ProjectConfig
 
+
+logger = logging.getLogger(__name__)
 
 UNTRACKED_LIST_MAX_FILES = 200
 UNTRACKED_PREVIEW_MAX_FILES = 20
@@ -95,6 +100,169 @@ UNKNOWN_TASK_STATUS_WARNING = (
     "this can happen for older or incomplete task records. Inspect stdout/stderr "
     "for available evidence or rerun the task if needed."
 )
+MUTATION_DIAGNOSTICS_FILE = "mutation_diagnostics.jsonl"
+MUTATION_DIAGNOSTICS_MAX_BYTES = 1024 * 1024
+
+
+def _mutation_outcome(result: Any) -> tuple[str, str | None]:
+    if not isinstance(result, dict):
+        return "returned", None
+
+    status = result.get("status")
+    action = result.get("action")
+    status_text = status if isinstance(status, str) else None
+    action_text = action if isinstance(action, str) else None
+
+    if (status_text and status_text.startswith("blocked")) or action_text == "blocked":
+        return "blocked", status_text
+    if status_text == "ok_noop" or action_text == "no_op":
+        return "no_op", status_text
+    if status_text in {"no_pid", "already_exited"}:
+        return "no_op", status_text
+    if status_text in {"terminated", "pushed", "created", "merged", "ok"}:
+        return "executed", status_text
+    return "returned", status_text
+
+
+def _safe_diagnostic_text(value: Any) -> str | None:
+    return value if isinstance(value, str) else None
+
+
+def _mutation_diagnostic_event(
+    *,
+    tool_name: str,
+    phase: str,
+    project_id: Any = None,
+    task_id: Any = None,
+    outcome: str | None = None,
+    status: str | None = None,
+    error_type: str | None = None,
+) -> dict[str, str | None]:
+    return {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "event": "approval_card_mutation",
+        "phase": phase,
+        "tool": tool_name,
+        "project_id": _safe_diagnostic_text(project_id),
+        "task_id": _safe_diagnostic_text(task_id),
+        "outcome": outcome,
+        "status": status,
+        "error_type": error_type,
+    }
+
+
+def _log_mutation_diagnostic(event: dict[str, str | None]) -> None:
+    logger.info(
+        "approval-card mutation %s: tool=%s outcome=%s status=%s",
+        event["phase"],
+        event["tool"],
+        event["outcome"],
+        event["status"],
+        extra={
+            "lcb_diagnostic_event": event["event"],
+            "lcb_phase": event["phase"],
+            "lcb_tool": event["tool"],
+            "lcb_project_id": event["project_id"],
+            "lcb_task_id": event["task_id"],
+            "lcb_outcome": event["outcome"],
+            "lcb_status": event["status"],
+            "lcb_error_type": event["error_type"],
+        },
+    )
+
+
+def _append_mutation_diagnostic_jsonl(path: Path, event: dict[str, str | None]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    line = json.dumps(event, sort_keys=True, separators=(",", ":")) + "\n"
+    line_size = len(line.encode("utf-8"))
+    next_size = path.stat().st_size + line_size if path.exists() else line_size
+    if next_size > MUTATION_DIAGNOSTICS_MAX_BYTES:
+        path.write_text("", encoding="utf-8")
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(line)
+
+
+def _record_mutation_diagnostic(
+    runner: Any,
+    *,
+    tool_name: str,
+    phase: str,
+    project_id: Any = None,
+    task_id: Any = None,
+    outcome: str | None = None,
+    status: str | None = None,
+    error_type: str | None = None,
+) -> None:
+    event = _mutation_diagnostic_event(
+        tool_name=tool_name,
+        phase=phase,
+        project_id=project_id,
+        task_id=task_id,
+        outcome=outcome,
+        status=status,
+        error_type=error_type,
+    )
+    _log_mutation_diagnostic(event)
+    try:
+        diagnostics_path = runner.config.server.task_dir / MUTATION_DIAGNOSTICS_FILE
+        _append_mutation_diagnostic_jsonl(diagnostics_path, event)
+    except Exception:
+        logger.debug("failed to append approval-card mutation diagnostic", exc_info=True)
+
+
+def _mutation_diagnostic(
+    tool_name: str,
+    *,
+    project_arg: int | None = 0,
+    task_arg: int | None = None,
+):
+    def decorate(func: Any) -> Any:
+        @functools.wraps(func)
+        def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
+            project_id = kwargs.get("project_id")
+            if project_id is None and project_arg is not None and len(args) > project_arg:
+                project_id = args[project_arg]
+
+            task_id = kwargs.get("task_id")
+            if task_id is None and task_arg is not None and len(args) > task_arg:
+                task_id = args[task_arg]
+
+            _record_mutation_diagnostic(
+                self,
+                tool_name=tool_name,
+                phase="invoked",
+                project_id=project_id,
+                task_id=task_id,
+            )
+            try:
+                result = func(self, *args, **kwargs)
+            except Exception as exc:
+                _record_mutation_diagnostic(
+                    self,
+                    tool_name=tool_name,
+                    phase="error",
+                    project_id=project_id,
+                    task_id=task_id,
+                    outcome="error",
+                    error_type=type(exc).__name__,
+                )
+                raise
+
+            outcome, status = _mutation_outcome(result)
+            _record_mutation_diagnostic(
+                self,
+                tool_name=tool_name,
+                phase="completed",
+                project_id=project_id,
+                task_id=task_id,
+                outcome=outcome,
+                status=status,
+            )
+            return result
+
+        return wrapper
+
+    return decorate
 
 
 def _apply_review_contract(prompt: str) -> tuple[str, bool]:
@@ -361,6 +529,7 @@ class TaskRunner:
             result["warnings"] = output_meta["warnings"]
         return result
 
+    @_mutation_diagnostic("abort_task", project_arg=None, task_arg=0)
     def abort_task(self, task_id: str) -> dict[str, Any]:
         rec = self._task_record(task_id)
         if not rec.pid_path.exists():
@@ -1144,6 +1313,7 @@ class TaskRunner:
             "truncation": truncation,
         }
 
+    @_mutation_diagnostic("git_create_work_branch")
     def git_create_work_branch(
         self,
         project_id: str,
@@ -1502,6 +1672,7 @@ class TaskRunner:
             "results": results,
         }
 
+    @_mutation_diagnostic("git_commit_and_push")
     def git_commit_and_push(
         self,
         project_id: str,
@@ -1667,6 +1838,7 @@ class TaskRunner:
             "log": log,
         }
 
+    @_mutation_diagnostic("github_create_pr")
     def github_create_pr(
         self,
         project_id: str,
@@ -1957,6 +2129,7 @@ class TaskRunner:
         evidence["pr_readiness"] = pr_readiness
         return {"status": "ok", "pr": canonical["pr"], **evidence}
 
+    @_mutation_diagnostic("github_merge_pr")
     def github_merge_pr(
         self,
         project_id: str,
@@ -2311,6 +2484,7 @@ class TaskRunner:
             "local_sync_readiness": sync_readiness,
         }
 
+    @_mutation_diagnostic("git_sync_local_branch_to_origin")
     def git_sync_local_branch_to_origin(
         self,
         project_id: str,
