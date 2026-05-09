@@ -2,6 +2,37 @@
 
 ## [Unreleased]
 
+## [0.3.5] - 2026-05-09
+
+### Summary
+
+v0.3.5 improves Local Codex Bridge reliability and operator diagnostics across Codex task status reporting, changed-file review helpers, PR readiness output, historical task metadata, and verification timeout handling.
+
+### Fixed
+
+- Fixed Codex task status refresh so tasks started by the current TaskRunner no longer continue to report running after the tracked child process has exited.
+- Added support for `get_changed_file_text(source="unstaged")` as an alias for worktree text, matching `get_changed_file_diff` source behavior.
+- Improved already-merged PR readiness output so read-only PR status tools no longer show noisy open-PR merge blockers after a PR has merged.
+- Added output-only diagnostics for historical or incomplete task records whose status remains unknown because reliable process metadata is unavailable.
+- Improved `run_verification` and `run_verification_bundle` timeout reporting with structured timeout metadata, bounded output evidence, diagnostics, and suggested next steps.
+
+### Documentation
+
+- Documented the distinction between LCB-local verification subprocess timeouts and ChatGPT/MCP platform response timeouts.
+
+### Validation
+
+- `git_status`, `diff_check`, and `ruff` passed through LCB.
+- Lightweight verification bundle passed through LCB.
+- Forced local pytest timeout returned structured timeout diagnostics through LCB.
+- Full pytest passed in Terminal: 352 passed, 1 warning.
+- Read-only Codex smoke checks passed for lcb and vhf.
+
+### Notes
+
+- Full pytest through ChatGPT/MCP may still exceed the outer platform/tool timeout; use Terminal or smaller allowlisted verification commands for long-running suites.
+- Codex/Cloudflare MCP warnings observed during smoke testing were environmental and did not block successful smoke completion.
+
 ## [0.3.4] - 2026-05-07
 
 ### Fixed
